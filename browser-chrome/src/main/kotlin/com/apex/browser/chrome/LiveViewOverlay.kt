@@ -39,7 +39,9 @@ import kotlinx.coroutines.launch
  *    球可随时收起/再看，从浏览器功能页也能一键「查看实时页面」。
  *
  * 形态（透明玻璃卡片，非全屏）：
- * - 窗口宽 85 屏宽、高 60 屏高，居中，PixelFormat.TRANSLUCENT；
+ * - 窗口尺寸**用户可调**（v1.6.0）：默认宽 85 屏宽、高 60 屏高，居中，
+ *   PixelFormat.TRANSLUCENT；右下角缩放把手拖拽改尺寸（钳位防过小/过大），
+ *   比例持久化到 SharedPreferences，重建窗口时恢复用户偏好；
  * - 顶部控制条：状态呼吸点 + 页面标题/URL + 「接管」胶囊 + 收起按钮，可拖动整卡；
  * - 页面区直接承载引擎 active WebView（与人工接管共用同一实例，实时画面零拷贝）；
  * - 窗口小于屏幕：卡外触摸自然穿透到下层应用，不打扰手机正常使用。
@@ -75,8 +77,36 @@ class LiveViewOverlay private constructor(
          * 先 detach WebView，本卡随后换挂，避免抢挂后又被摘走）。 */
         private const val STATE_APPLY_DELAY_MS = 64L
 
-        /** 可见期间的轻量轮询周期：标题/URL/进度刷新 + 换挂自愈。 */
-        private const val POLL_INTERVAL_MS = 1_200L
+        /** 可见期间的轻量轮询：标题/URL/进度刷新 + 换挂自愈。
+         *  v1.6.0 自适应节流：页面加载中（progress<100）用快档保证进度条流畅，
+         *  静止时降为慢档 —— 常驻会话的唤醒次数 ↓（原来固定 1.2s 不分场景）。 */
+        internal const val POLL_ACTIVE_MS = 500L
+        internal const val POLL_IDLE_MS = 2_000L
+
+        /** 窗口尺寸比例的持久化（宽度/高度各占屏幕的比例）。 */
+        private const val SIZE_PREFS = "apex_live_view_size"
+        private const val KEY_WIDTH_RATIO = "width_ratio"
+        private const val KEY_HEIGHT_RATIO = "height_ratio"
+
+        /** 尺寸钳位（占屏幕比例）：过小看不清页面，过大失去「小窗」语义。 */
+        internal const val MIN_WIDTH_RATIO = 0.35f
+        internal const val MIN_HEIGHT_RATIO = 0.25f
+        internal const val MAX_WIDTH_RATIO = 0.95f
+        internal const val MAX_HEIGHT_RATIO = 0.85f
+        internal const val DEFAULT_WIDTH_RATIO = 0.85f
+        internal const val DEFAULT_HEIGHT_RATIO = 0.60f
+
+        /** 拖动/缩放参数应用的帧对齐节流（~60fps：updateViewLayout 全量
+         *  relayout 走 WMS，每次 MOVE 都发会造成 Motion 峰值期的窗口抖动）。 */
+        internal const val PARAM_APPLY_MIN_INTERVAL_MS = 16L
+
+        /** 纯函数：按页面进度选下一轮询档位（单测锁定语义）。 */
+        internal fun pollIntervalFor(progress: Int): Long =
+            if (progress in 0..99) POLL_ACTIVE_MS else POLL_IDLE_MS
+
+        /** 纯函数：尺寸比例钳位（单测锁定语义）。 */
+        internal fun clampSizeRatio(value: Float, min: Float, max: Float): Float =
+            value.coerceIn(min, max)
 
         private val COLOR_RUNNING = 0xFF00E5FF.toInt()
         private val COLOR_WAITING = 0xFFFFB800.toInt()
@@ -120,6 +150,12 @@ class LiveViewOverlay private constructor(
 
     @Volatile private var attachedWebView: WebView? = null
     private var dotPulse: ObjectAnimator? = null
+
+    /** 右下角缩放把手（重建窗口时复用引用；GONE 后置 null）。 */
+    @Volatile private var resizeGrip: View? = null
+
+    /** 参数应用节流游标（拖动/缩放共用，帧对齐 ~60fps）。 */
+    private var lastParamsApplyMs = 0L
 
     /** v1.5.0：in-app 承载权变化 —— 进场转 GHOST / 退场按状态机重放 ——先于 init 声明。 */
     private val arbiterListener = InAppHostingArbiter.Listener { active ->
@@ -261,6 +297,7 @@ class LiveViewOverlay private constructor(
         statusDot = null
         urlText = null
         progressBar = null
+        resizeGrip = null
         attachedWebView = null
         windowFocusable = false
         mode = LiveViewMode.GONE
@@ -276,9 +313,20 @@ class LiveViewOverlay private constructor(
         val screenWidth = appContext.resources.displayMetrics.widthPixels
         val screenHeight = appContext.resources.displayMetrics.heightPixels
 
+        // v1.6.0：初始尺寸恢复用户上次拖拽的比例（无记录用默认 85%/60%）
+        val prefs = appContext.getSharedPreferences(SIZE_PREFS, Context.MODE_PRIVATE)
+        val widthRatio = clampSizeRatio(
+            prefs.getFloat(KEY_WIDTH_RATIO, DEFAULT_WIDTH_RATIO),
+            MIN_WIDTH_RATIO, MAX_WIDTH_RATIO,
+        )
+        val heightRatio = clampSizeRatio(
+            prefs.getFloat(KEY_HEIGHT_RATIO, DEFAULT_HEIGHT_RATIO),
+            MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO,
+        )
+
         val params = WindowManager.LayoutParams(
-            (screenWidth * 0.85f).toInt(),
-            (screenHeight * 0.60f).toInt(),
+            (screenWidth * widthRatio).toInt(),
+            (screenHeight * heightRatio).toInt(),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             // 卡内可交互（滚动真实页面/点按钮）；卡外触摸穿透下层应用；
             // 默认不可聚焦 —— 不抢下层键盘焦点，首次卡内按下才临时聚焦（IME 用）
@@ -390,15 +438,39 @@ class LiveViewOverlay private constructor(
             onFirstTouch = { makeWindowFocusable() }
         }
 
+        // ── 右下角缩放把手（v1.6.0）：拖拽改变窗口宽高，比例持久化 ──
+        val grip = TextView(appContext).apply {
+            text = "\u25E2"                       // ◢ 斜角缩放意象
+            textSize = 14f
+            setTextColor(COLOR_TEXT_SECONDARY)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                cornerRadii = floatArrayOf(
+                    dp(16).toFloat(), dp(16).toFloat(),
+                    0f, 0f, 0f, 0f,
+                    0f, 0f,
+                )
+                setColor(0x2EFFFFFF)
+            }
+            elevation = dp(6).toFloat()          // 恒在换挂进来的 WebView 之上
+            contentDescription = appContext.getString(R.string.browser_live_resize_cd)
+            layoutParams = FrameLayout.LayoutParams(
+                dp(40), dp(40), Gravity.BOTTOM or Gravity.END
+            )
+        }
+        attachCornerResize(grip, params, screenWidth, screenHeight)
+
         root.addView(bar, bar.layoutParams)
         root.addView(progress, progress.layoutParams)
         root.addView(host, host.layoutParams)
+        host.addView(grip, grip.layoutParams)
 
         return try {
             windowManager.addView(root, params)
             windowParams = params
             rootView = root
             webViewHost = host
+            resizeGrip = grip
             statusDot = dot
             urlText = title
             progressBar = progress
@@ -429,15 +501,82 @@ class LiveViewOverlay private constructor(
                     val h = appContext.resources.displayMetrics.heightPixels / 2
                     params.x = (startX + (event.rawX - downX).toInt()).coerceIn(-w, w)
                     params.y = (startY + (event.rawY - downY).toInt()).coerceIn(-h, h)
-                    rootView?.let { root ->
-                        runCatching { windowManager.updateViewLayout(root, params) }
-                    }
+                    applyParamsThrottled()
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
         }
+    }
+
+    /** 右下角缩放把手（v1.6.0）：拖拽改变窗口宽高（中心锚定），比例持久化。
+     *
+     *  尺寸钳位到 [MIN_*_RATIO, MAX_*_RATIO] × 屏幕像素 —— 过小看不清页面，
+     *  过大失去「小窗」语义；ACTION_UP 落盘 SharedPreferences，下次建窗恢复。
+     *  MOVE 沿用 [applyParamsThrottled] 帧对齐节流，与顶栏拖动同套纪律。 */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachCornerResize(
+        grip: View,
+        params: WindowManager.LayoutParams,
+        screenWidth: Int,
+        screenHeight: Int,
+    ) {
+        var downX = 0f
+        var downY = 0f
+        var startW = 0
+        var startH = 0
+        val minW = (screenWidth * MIN_WIDTH_RATIO).toInt()
+        val maxW = (screenWidth * MAX_WIDTH_RATIO).toInt()
+        val minH = (screenHeight * MIN_HEIGHT_RATIO).toInt()
+        val maxH = (screenHeight * MAX_HEIGHT_RATIO).toInt()
+        grip.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.rawX; downY = event.rawY
+                    startW = params.width; startH = params.height
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    params.width = (startW + (event.rawX - downX).toInt()).coerceIn(minW, maxW)
+                    params.height = (startH + (event.rawY - downY).toInt()).coerceIn(minH, maxH)
+                    applyParamsThrottled()
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    applyParamsNow()
+                    persistSizeRatio(params, screenWidth, screenHeight)
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    /** 帧对齐节流：≥16ms 才真正调 updateViewLayout，尾帧在 UP/CANCEL 补发。 */
+    private fun applyParamsThrottled() {
+        val now = System.currentTimeMillis()
+        if (now - lastParamsApplyMs >= PARAM_APPLY_MIN_INTERVAL_MS) applyParamsNow()
+    }
+
+    private fun applyParamsNow() {
+        val root = rootView ?: return
+        val params = windowParams ?: return
+        lastParamsApplyMs = System.currentTimeMillis()
+        runCatching { windowManager.updateViewLayout(root, params) }
+            .onFailure { Log.w(TAG, "apply params failed: ${it.message}") }
+    }
+
+    /** 尺寸比例落盘（下次建窗恢复用户偏好）。 */
+    private fun persistSizeRatio(params: WindowManager.LayoutParams, screenWidth: Int, screenHeight: Int) {
+        if (screenWidth <= 0 || screenHeight <= 0) return
+        runCatching {
+            appContext.getSharedPreferences(SIZE_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putFloat(KEY_WIDTH_RATIO, clampSizeRatio(params.width.toFloat() / screenWidth, MIN_WIDTH_RATIO, MAX_WIDTH_RATIO))
+                .putFloat(KEY_HEIGHT_RATIO, clampSizeRatio(params.height.toFloat() / screenHeight, MIN_HEIGHT_RATIO, MAX_HEIGHT_RATIO))
+                .apply()
+        }.onFailure { Log.w(TAG, "persist size failed: ${it.message}") }
     }
 
     /** 「接管」：进入人工接管 —— 状态机 WAITING_HUMAN，全屏接管 chrome 接管 WebView。 */
@@ -497,12 +636,13 @@ class LiveViewOverlay private constructor(
             bar.visibility = if (p >= 100) View.INVISIBLE else View.VISIBLE
         }
         applyStatusColor()
-        mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
+        // v1.6.0 自适应节流：加载中快档（进度条流畅 + 自愈及时），静止慢档省电
+        mainHandler.postDelayed(pollRunnable, pollIntervalFor(p))
     }
 
     private fun startPolling() {
         mainHandler.removeCallbacks(pollRunnable)
-        mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
+        mainHandler.postDelayed(pollRunnable, POLL_ACTIVE_MS)
     }
 
     private fun stopPolling() {
