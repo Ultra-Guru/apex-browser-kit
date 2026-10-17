@@ -1,7 +1,10 @@
 package com.apex.browser.engine
 
+import android.os.SystemClock
 import android.webkit.WebView
+import com.apex.browser.core.BrowserScript
 import kotlin.coroutines.resume
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
@@ -44,3 +47,60 @@ internal suspend fun WebView.evaluateAsInt(js: String): Int? =
     suspendCancellableCoroutine { cont ->
         evaluateJavascript(js) { result -> cont.resume(result?.trim()?.toIntOrNull()) }
     }
+
+/**
+ * `waitForCondition` 的轮询循环本体（v1.4.0 自 BrowserEngine.kt 迁入，纯代码
+ * 搬移；GATE 1 预算纪律）。入口校验（模式白名单 / 谓词解析）留在引擎方法内，
+ * 这里只做「轮询到命中或超时」：
+ * - `selector` / `element_gone` / `text` / `text_gone`：同步 JS 谓词轮询；
+ * - `network_idle`：在途请求数**连续 2 次**为 0 才算 idle（单次 0 可能只是
+ *   两次请求的间隙）；
+ * - `selector_count`：谓词命中数比较；
+ * - `url`：注入 CURRENT_URL_JS 求值——SPA pushState/replaceState 即时反映到
+ *   location.href，而 native `webView.url` 只在导航提交时更新。
+ *
+ * 求值器（evaluateBoolean / evaluateJson）由引擎以 lambda 注入：循环逻辑可
+ * 独立演进，引擎私有成员可见性不外泄。
+ */
+internal suspend fun waitConditionLoop(
+    wv: WebView,
+    mode: String,
+    value: String,
+    countPred: CountPredicate?,
+    timeoutMs: Long,
+    pollMs: Long,
+    evaluateBoolean: suspend (WebView, String) -> Boolean,
+    evaluateJson: suspend (WebView, String) -> String,
+): BrowserEngine.WaitOutcome {
+    val effectiveTimeout = timeoutMs.coerceIn(500, 60_000)
+    val start = SystemClock.uptimeMillis()
+    var idleStreak = 0
+    while (SystemClock.uptimeMillis() - start < effectiveTimeout) {
+        val hit = when (mode) {
+            "selector" -> runCatching { evaluateBoolean(wv, BrowserScript.selectorPresentJs(value)) }.getOrDefault(false)
+            "element_gone" -> !runCatching { evaluateBoolean(wv, BrowserScript.selectorPresentJs(value)) }.getOrDefault(true)
+            "text" -> runCatching { evaluateBoolean(wv, BrowserScript.textContainsJs(value)) }.getOrDefault(false)
+            "text_gone" -> !runCatching { evaluateBoolean(wv, BrowserScript.textContainsJs(value)) }.getOrDefault(true)
+            "network_idle" -> {
+                // 连续 2 次读到 0 才算 idle：单次 0 可能只是两次请求的间隙
+                val pending = runCatching { wv.evaluateAsInt(BrowserScript.networkIdleJs()) }.getOrNull()
+                if (pending == 0) idleStreak++ else idleStreak = 0
+                idleStreak >= 2
+            }
+            "selector_count" -> {
+                val p = countPred
+                val count = if (p == null) null else runCatching { wv.evaluateAsInt(BrowserScript.selectorCountJs(p.selector)) }.getOrNull()
+                count != null && p != null && matchesCount(count, p)
+            }
+            "url" -> runCatching { evaluateJson(wv, BrowserScript.CURRENT_URL_JS) }.getOrDefault("").contains(value, ignoreCase = true)
+            else -> false // 未知模式已在引擎入口拒绝
+        }
+        if (hit) return BrowserEngine.WaitOutcome(true, "matched $mode", SystemClock.uptimeMillis() - start)
+        delay(pollMs.coerceIn(100, 2000))
+    }
+    return BrowserEngine.WaitOutcome(
+        false,
+        "timeout (${effectiveTimeout}ms) waiting for $mode '$value'",
+        SystemClock.uptimeMillis() - start,
+    )
+}
