@@ -329,6 +329,16 @@ Compose UI 层文案继续走 `res/values` + `values-en`（`browser_` 前缀强�
 - 宿主接法：`InAppChromeHostFactory.get(engine, wiring)` 注册进宿主 DI
   （与另两个工厂同款单例纪律）。
 
+### P1 渲染修复：接管浮窗「有 chrome 无页面」（`BrowserChrome` 页区透明）
+
+- 旧实现根 Column 恒刷不透明 `palette.background`，而真实 WebView 宿主在
+  **组合树之外**（同窗口兄弟 View 层）—— 不透明底色把 WebView 整个盖住：
+  人工接管浮窗展开后只见地址栏 + 一块纯色页区，**页面内容从未显示过**
+  （ChromeBar / TabStrip 自带不透明底，根底色对头部是冗余双重绘制）；
+- 修复：`BrowserChrome` 新增 `transparentPageArea: Boolean = false`（默认
+  保持旧视觉，页区由 pageSlot 自绘的消费者零影响）；`BrowserOverlay` 传
+  true —— 页区透出真实 WebView，`InAppChromeHost` 消费方同款传法。
+
 ### 三承载面互斥仲裁（`InAppHostingArbiter`，新增）
 
 - 同一 WebView 同一时刻只能有一个父容器：in-app 容器 / 全屏接管浮窗 /

@@ -229,6 +229,11 @@ class BrowserOverlay private constructor(
                     modifier = Modifier.statusBarsPadding(),
                     handoffBanner = { HandoffBanner() },
                     onChromeHeightChanged = { px -> applyChromeHeaderHeight(px) },
+                    // P1 修复（v1.5.0）：真实 WebView 在组合树外（同窗口兄弟 View 层，
+                    // 即下方 host 容器）—— 根 Column 不刷不透明底色，页面区透出
+                    // 真实页面。旧实现恒刷 palette.background 把 WebView 整个盖住：
+                    // 接管浮窗「有 chrome 无页面」，用户只见一块纯色页区。
+                    transparentPageArea = true,
                     pageSlot = {}, // WebView 由 host(FrameLayout) 承载，页面区不重复渲染
                 )
             }
