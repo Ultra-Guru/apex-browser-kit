@@ -97,4 +97,11 @@
     <!-- Snacks (BrowserChrome) -->
     <string name="browser_snack_link_copied">Link copied</string>
     <string name="browser_snack_no_link">No page link</string>
+
+
+    <!-- Live view overlay (LiveViewOverlay · v1.4.0) -->
+    <string name="browser_live_take_over">Take over</string>
+    <string name="browser_live_take_over_cd">Enter human takeover: open the full browser window</string>
+    <string name="browser_live_close_cd">Collapse the live view overlay</string>
+    <string name="browser_live_url_empty">Live view · waiting for the Agent to browse</string>
 </resources>

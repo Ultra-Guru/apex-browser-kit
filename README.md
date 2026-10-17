@@ -12,7 +12,7 @@ Embedded WebView automation engine with Compose chrome UI — 从
 |---|---|---|
 | `:browser-core` | 纯 Kotlin JVM（零 Android 依赖） | DOM 模型（`DomElement`/`PageSnapshot`）、注入 JS（`BrowserScript`）、快照解析（`DomParser`）、重试/熔断（`RetryPolicy`/`CircuitBreaker`） |
 | `:browser-engine` | Android Library（无 UI） | 无头 WebView 自动化引擎（`BrowserEngine`）：状态机、标签管理、物理触摸注入、加载等待、Cookie 持久化、崩溃恢复 |
-| `:browser-chrome` | Android Library（Compose UI） | 「给人用的浏览器界面」：地址胶囊即进度条、标签条/总览、页内查找、下载面板、JS 弹窗/权限浮层、浮窗宿主（`BrowserOverlay`） |
+| `:browser-chrome` | Android Library（Compose UI + 纯 View 实时窗） | 「给人用的浏览器界面」：地址胶囊即进度条、标签条/总览、页内查找、下载面板、JS 弹窗/权限浮层、全屏接管浮窗（`BrowserOverlay`）、透明实时页面悬浮窗（`LiveViewOverlay`，v1.4.0） |
 
 依赖方向：`chrome → engine → core`（`api` 传递，下游引 chrome 即得全套类型）。
 
@@ -91,9 +91,9 @@ if (file("../apex-browser-kit").isDirectory) {
 
 ```kotlin
 dependencies {
-    implementation("com.apex.browser:browser-core:1.3.0")
-    implementation("com.apex.browser:browser-engine:1.3.0")
-    implementation("com.apex.browser:browser-chrome:1.3.0")
+    implementation("com.apex.browser:browser-core:1.4.0")
+    implementation("com.apex.browser:browser-engine:1.4.0")
+    implementation("com.apex.browser:browser-chrome:1.4.0")
 }
 ```
 
@@ -310,6 +310,47 @@ Compose UI 层文案继续走 `res/values` + `values-en`（`browser_` 前缀强�
 
 版本：三模块 1.1.0 → **1.2.0**（additive API，全部为带默认值参数的尾参扩展，
 宿主源码兼容）。
+
+## v1.4.0 变更（实时页面悬浮窗 / 悬浮窗 P0 崩溃修复 / 活动标签广播）
+
+### 透明实时页面悬浮窗（`LiveViewOverlay`，新增）
+
+- **Agent 一用浏览器就自动弹出**：订阅引擎状态机，`AGENT_DRIVING` 即呈现
+  透明玻璃卡片浮窗（85 屏宽 × 60 屏高、居中可拖动、PixelFormat.TRANSLUCENT），
+  页面区直接承载引擎 active WebView —— 用户全程**看见 Agent 正在开的真实页面**；
+- **收起不是断开**：用户「✕」收起后窗口转 GHOST 无头宿主（视图 INVISIBLE +
+  `FLAG_NOT_TOUCHABLE`，窗口保活）——WebView 留在视图树内持续被测量布局，
+  自动化的 CSS→物理坐标换算与命中测试不因脱离窗口而失真；
+- **三态生命周期**（`LiveViewPolicy`，纯 JVM 可测）：VISIBLE 显示 / GHOST
+  隐形宿主 / GONE 整窗移除（会话结束自动复位「用户收起」标记，下次自动弹出恢复）；
+- **纯 View 实现零 Compose**：刻意避开浮窗内 Compose 的
+  ViewTreeLifecycleOwner 系列窗口层级坑（见下条 P0 的同类根源），控制条崩溃面最小；
+- 宿主接法：`LiveViewOverlayFactory.get(context, engine)` 注册进宿主 DI
+  （与 `BrowserOverlayFactory` 同款单例纪律），悬浮球点击 `toggle()`、
+  浏览器功能页「查看实时页面」调 `show()`。
+
+### P0 崩溃修复：`BrowserChrome` 浮窗内 `BackHandler` 主线程崩溃（宿主 #375）
+
+- activity-compose 的 `BackHandler` 在 `enabled=false` 时也会先
+  `checkNotNull(LocalOnBackPressedDispatcherOwner)` —— 悬浮窗 ComposeView 挂在
+  WindowManager（无 Activity 返回栈），该 Local 恒为 null → 组合即抛
+  `IllegalStateException` 杀主线程（crash-1792191618578：浮窗显示后约 20s
+  崩溃，用户观感「点击悬浮球闪退 / agent 用浏览器后卡死重启」）；
+- 修复：无 dispatcher 时整个 `BackHandler` 不进入组合树（条件组合，而非
+  `enabled=false` 短路 —— 旧实现的 `hasBackDispatcher` 守卫防不住这层
+  checkNotNull）。
+
+### 引擎：活动标签广播（`ActiveTabListener`，additive API）
+
+- 标签新建/切换/关闭回落/崩溃重建/长会话重建都会换新活动 WebView，但这类
+  变化**不产生状态机迁移** —— 只订 `BrowserUiCallback` 的可视层拿不到新实例；
+- 新增 `BrowserEngine.addActiveTabListener / removeActiveTabListener`：
+  把「当前应展示哪个 WebView」的变化单独广播（主线程），实时页面悬浮窗据此
+  换挂，Agent 驾驶中切标签实时画面跟随切换。
+
+版本：三模块 1.3.0 → **1.4.0**（additive API + 一个 P0 修复；`LiveViewOverlay`
+/ `LiveViewOverlayFactory` / `LiveViewPolicy` / `ActiveTabListener` 均为新增，
+无破坏性变更）。
 
 ## v1.3.0 变更（错误语义 / 快照保真度 / 等待谓词 / 可观测性）
 

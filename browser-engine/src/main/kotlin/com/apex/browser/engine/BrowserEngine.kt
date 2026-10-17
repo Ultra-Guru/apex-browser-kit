@@ -120,6 +120,35 @@ class BrowserEngine private constructor(
         uiCallbacks.remove(cb)
     }
 
+    // ───────── 活动标签通知（v1.4.0：实时页面悬浮窗的数据源） ─────────
+    /**
+     * 活动标签变化订阅者（标签新建/切换/关闭回落/崩溃重建/导航重建都会触发）。
+     *
+     * 与 [BrowserUiCallback] 的分工：后者只管会话状态机迁移（HIDDEN/DRIVING/
+     * WAITING_HUMAN/RECOVERING），而 Agent 驾驶期间 browser_switch_tab /
+     * browser_new_tab 等工具换页不产生状态迁移——可视层（如实时页面悬浮窗）
+     * 若只订状态就拿不到新 WebView。本回调把「当前应展示哪个 WebView」的变化
+     * 单独广播，通知必须已在主线程（与标签管理方法同线程约定）。
+     */
+    interface ActiveTabListener {
+        fun onActiveTabChanged(webView: WebView?)
+    }
+
+    @Volatile
+    private var activeTabListeners = CopyOnWriteArraySet<ActiveTabListener>()
+
+    /** 注册活动标签订阅者（实时页面悬浮窗、霓虹球等可视层）。 */
+    fun addActiveTabListener(listener: ActiveTabListener) { activeTabListeners.add(listener) }
+
+    /** 注销活动标签订阅者。 */
+    fun removeActiveTabListener(listener: ActiveTabListener) { activeTabListeners.remove(listener) }
+
+    /** 统一活动页通知出口：活动 WebView 实例变化时广播（含变 null 的会话收尾）。 */
+    private fun notifyActiveTabChanged() {
+        val view = activeWebView()
+        activeTabListeners.forEach { runCatching { it.onActiveTabChanged(view) } }
+    }
+
     /** 统一状态出口：所有状态变更必须经此，以驱动可视层 */
     private fun setState(next: BrowserSessionState) {
         currentState = next
@@ -252,6 +281,8 @@ class BrowserEngine private constructor(
                 // 通知由调用方在 next snapshot/navigate 时感知；此处仅标记恢复
                 Handler(Looper.getMainLooper()).post {
                     setState(BrowserSessionState.RECOVERING)
+                    // 崩溃重建：活动 WebView 已换新实例，实时悬浮窗同步换挂
+                    notifyActiveTabChanged()
                 }
                 return true // 已处理，不 crash 宿主
             }
@@ -453,6 +484,8 @@ class BrowserEngine private constructor(
     fun newTabImmediate(url: String?): Int {
         val id = newTabSync()
         activeTabId = id
+        // v1.4.0：活动 WebView 变化（含首建页）→ 实时页面悬浮窗换挂
+        notifyActiveTabChanged()
         url?.let {
             // 带 URL 建页 = 浏览器被使用（网页搜索/自动化），驱动霓虹球按需出现
             markBrowserActiveFromHidden()
@@ -476,6 +509,7 @@ class BrowserEngine private constructor(
         val wv = createWebView()
         tabs[old.id] = old.copy(webView = wv, pageFinished = false)
         if (url.isNotBlank()) wv.loadUrl(url)
+        notifyActiveTabChanged()
     }
 
     /** 由 DI 构造器注入的 Application Context（避免在引擎内直接持 Activity） */
@@ -543,13 +577,19 @@ class BrowserEngine private constructor(
     fun switchTab(id: Int): Boolean {
         if (!tabs.containsKey(id)) return false
         activeTabId = id
+        // Agent 驾驶中的换页不产生状态迁移，单独广播让实时悬浮窗换挂 WebView
+        notifyActiveTabChanged()
         return true
     }
 
     fun closeTab(id: Int): Boolean {
         val tab = tabs.remove(id) ?: return false
         tab.webView.destroy()
-        if (activeTabId == id) activeTabId = tabs.keys.firstOrNull() ?: 0
+        if (activeTabId == id) {
+            activeTabId = tabs.keys.firstOrNull() ?: 0
+            // 关掉的是活动页：活动 WebView 回落/变空，实时悬浮窗需同步换挂或清空
+            notifyActiveTabChanged()
+        }
         return true
     }
 
@@ -681,38 +721,18 @@ class BrowserEngine private constructor(
             return@withContext WaitOutcome(false, "invalid selector_count value '$value' (expect '<selector>>=10' / '<selector> 10')", 0)
         }
         val wv = tab.webView
-        val effectiveTimeout = timeoutMs.coerceIn(500, 60_000)
-        val start = SystemClock.uptimeMillis()
-        var idleStreak = 0
-        while (SystemClock.uptimeMillis() - start < effectiveTimeout) {
-            val hit = when (mode) {
-                "selector" -> runCatching { evaluateBoolean(wv, BrowserScript.selectorPresentJs(value)) }.getOrDefault(false)
-                "element_gone" -> !runCatching { evaluateBoolean(wv, BrowserScript.selectorPresentJs(value)) }.getOrDefault(true)
-                "text" -> runCatching { evaluateBoolean(wv, BrowserScript.textContainsJs(value)) }.getOrDefault(false)
-                "text_gone" -> !runCatching { evaluateBoolean(wv, BrowserScript.textContainsJs(value)) }.getOrDefault(true)
-                "network_idle" -> {
-                    // 连续 2 次读到 0 才算 idle：单次 0 可能只是两次请求的间隙
-                    val pending = runCatching { wv.evaluateAsInt(BrowserScript.networkIdleJs()) }.getOrNull()
-                    if (pending == 0) idleStreak++ else idleStreak = 0
-                    idleStreak >= 2
-                }
-                "selector_count" -> {
-                    val p = countPred
-                    val count = if (p == null) null else runCatching { wv.evaluateAsInt(BrowserScript.selectorCountJs(p.selector)) }.getOrNull()
-                    count != null && p != null && matchesCount(count, p)
-                }
-                // url 改注入 CURRENT_URL_JS 求值：SPA pushState 即时反映到
-                // location.href，native webView.url 只在导航提交时更新
-                "url" -> runCatching { evaluateJson(wv, BrowserScript.CURRENT_URL_JS) }.getOrDefault("").contains(value, ignoreCase = true)
-                else -> false // 未知模式已在入口拒绝
-            }
-            if (hit) return@withContext WaitOutcome(true, "matched $mode", SystemClock.uptimeMillis() - start)
-            delay(pollMs.coerceIn(100, 2000))
-        }
-        WaitOutcome(
-            false,
-            "timeout (${effectiveTimeout}ms) waiting for $mode '$value'",
-            SystemClock.uptimeMillis() - start
+        // 预算纪律（GATE 1，同 CountPredicate 先例）：轮询循环本体迁
+        // WaitPredicates.kt（纯代码搬移；evaluateBoolean/evaluateJson 以 lambda
+        // 注入，私有可见性不外泄）
+        waitConditionLoop(
+            wv = wv,
+            mode = mode,
+            value = value,
+            countPred = countPred,
+            timeoutMs = timeoutMs,
+            pollMs = pollMs,
+            evaluateBoolean = { view, js -> evaluateBoolean(view, js) },
+            evaluateJson = { view, js -> evaluateJson(view, js) },
         )
     }
 
