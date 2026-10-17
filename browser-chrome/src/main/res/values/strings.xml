@@ -108,4 +108,5 @@
     <string name="browser_live_take_over_cd">进入人工接管：展开全屏浏览器窗口</string>
     <string name="browser_live_close_cd">收起实时页面悬浮窗</string>
     <string name="browser_live_url_empty">实时页面 · 等待 Agent 开始浏览</string>
+    <string name="browser_live_resize_cd">拖拽调整悬浮窗大小</string>
 </resources>
