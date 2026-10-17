@@ -76,12 +76,17 @@ fun BrowserChrome(
     }
 
     // 系统返回键：编辑态 → 查找栏 → 浮层，逐级让位；都关着则交还宿主。
-    // 浮窗 ComposeView 没挂 OnBackPressedDispatcherOwner（Activity 才有）时
-    // 直接不注册，避免任何窗口层级差异下的运行时异常。
-    val hasBackDispatcher = LocalOnBackPressedDispatcherOwner.current != null
-    val backConsumable = (ui.address is AddressBarUi.Editing ||
-        ui.findBarVisible || ui.sheet != null) && hasBackDispatcher
-    BackHandler(enabled = backConsumable) { controller.handleBack() }
+    // P0 修复（#375 / crash-1792191618578）：activity-compose 的 BackHandler 在
+    // enabled=false 时也会先 checkNotNull(LocalOnBackPressedDispatcherOwner)——
+    // 浮窗 ComposeView 挂在 WindowManager（无 Activity 返回栈），该 Local 为
+    // null → 组合即抛 IllegalStateException 杀主线程（旧实现的
+    // hasBackDispatcher 短路防不住这层 checkNotNull）。修复：无 dispatcher 时
+    // 整个 BackHandler 不进入组合树（条件组合，而非 enabled=false 短路）。
+    if (LocalOnBackPressedDispatcherOwner.current != null) {
+        val backConsumable = ui.address is AddressBarUi.Editing ||
+            ui.findBarVisible || ui.sheet != null
+        BackHandler(enabled = backConsumable) { controller.handleBack() }
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(controller) {
