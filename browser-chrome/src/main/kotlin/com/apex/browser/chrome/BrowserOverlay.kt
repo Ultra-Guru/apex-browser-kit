@@ -64,6 +64,14 @@ import kotlinx.coroutines.launch
  * 点球即再次进入接管）。WebView 容器的 topMargin 由 chrome 头部实际高度回调驱动，
  * 页面内容永不遮挡地址栏。
  *
+ * ## v1.5.0：与 in-app 内嵌浏览器互斥
+ *
+ * 宿主可用 [InAppChromeHost] 把完整浏览器嵌进 App 自己的窗口（零悬浮窗权限）。
+ * in-app 承载期间（[InAppHostingArbiter.isInAppHosting]）：WAITING_HUMAN 不再
+ * 自动展开本浮窗（in-app chrome 就是人的 UI），已展开则收起；in-app 退场
+ *（页面离开/Activity 暂停）且处于 WAITING_HUMAN 时自动重新展开 —— 用户
+ * 离开 App 后接管浮窗接管体验不变。
+ *
  * ## P0 修复：浮窗不再抢占键盘焦点
  *
  * 旧窗口 flags 缺 `FLAG_NOT_FOCUSABLE`：全屏 overlay 一出就抢走应用窗口焦点，
@@ -113,12 +121,27 @@ class BrowserOverlay private constructor(
     /** chrome 头部（地址栏+横幅+标签条）实测高度，px；驱动 WebView 容器留白。 */
     @Volatile private var chromeHeaderPx: Int = 0
 
+    /** in-app 承载权变化：进场（收让）/退场（WAITING_HUMAN 补展开）——先于 init 声明。 */
+    private val arbiterListener = InAppHostingArbiter.Listener { active ->
+        mainHandler.post {
+            when {
+                active -> if (rootView != null) doHide()
+                !active -> if (
+                    engine.currentState == BrowserEngine.BrowserSessionState.WAITING_HUMAN &&
+                    rootView == null
+                ) doShow()
+            }
+        }
+    }
+
     init {
         engine.addUiCallback(this)
         // 标签切换/新建/崩溃重建 → 换挂 WebView（wiring 已把链式 client 挂好）
         chromeWiring.onActiveWebViewChanged = { view ->
             mainHandler.post { rebindWebView(view) }
         }
+        // v1.5.0：in-app 承载仲裁 —— in-app 进场收起本浮窗，退场时按状态机补展开
+        InAppHostingArbiter.addListener(arbiterListener)
     }
 
     // ───────── BrowserUiCallback ─────────
@@ -130,7 +153,9 @@ class BrowserOverlay private constructor(
         mainHandler.post {
             when (state) {
                 BrowserEngine.BrowserSessionState.WAITING_HUMAN -> {
-                    show()
+                    // v1.5.0：in-app 承载期间人工接管由宿主 App 内嵌 chrome 展示，
+                    // 本浮窗不展开（避免双 UI 抢同一 WebView）；退场时仲裁监听补展开
+                    if (!InAppHostingArbiter.isInAppHosting) show()
                     visualHook?.onWaitingHuman()
                 }
                 BrowserEngine.BrowserSessionState.AGENT_DRIVING -> {

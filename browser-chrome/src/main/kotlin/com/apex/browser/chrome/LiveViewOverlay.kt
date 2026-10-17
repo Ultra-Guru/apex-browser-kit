@@ -51,6 +51,12 @@ import kotlinx.coroutines.launch
  * 与 BrowserOverlay 的分工：WAITING_HUMAN 时全屏接管 chrome 独占 WebView，
  * 本卡退 GHOST；交还（AGENT_DRIVING）后自动回 VISIBLE（除非用户收起过）。
  *
+ * v1.5.0 新增：与 [InAppChromeHost]（宿主 App 内嵌浏览器）互斥 —— in-app
+ * 承载期间（[InAppHostingArbiter.isInAppHosting]）本卡转 GHOST（页面在 App
+ * 内直接可见，卡片不与 in-app 容器争 WebView；换挂/自愈同步被守卫拦下），
+ * in-app 退场（页面离开/Activity 暂停）时按引擎状态机重放迁移 —— 用户回到
+ * 桌面/其他应用时实时卡片依旧弹出。
+ *
  * 纯 View 实现说明：刻意不用 Compose（浮窗内 Compose 有 ViewTreeLifecycleOwner
  * 系列窗口层级坑，#375 即此类），控制条十几个 View 足够，崩溃面最小。
  *
@@ -115,9 +121,21 @@ class LiveViewOverlay private constructor(
     @Volatile private var attachedWebView: WebView? = null
     private var dotPulse: ObjectAnimator? = null
 
+    /** v1.5.0：in-app 承载权变化 —— 进场转 GHOST / 退场按状态机重放 ——先于 init 声明。 */
+    private val arbiterListener = InAppHostingArbiter.Listener { active ->
+        mainHandler.post {
+            if (active) {
+                if (mode == LiveViewMode.VISIBLE) becomeGhost()
+            } else {
+                applyTransition(stateEventFor(engine.currentState))
+            }
+        }
+    }
+
     init {
         engine.addUiCallback(this)
         engine.addActiveTabListener(this)
+        InAppHostingArbiter.addListener(arbiterListener)
     }
 
     // ───────── 宿主 API（悬浮球 / BrowserScreen「查看实时页面」） ─────────
@@ -141,15 +159,18 @@ class LiveViewOverlay private constructor(
         url: String?,
         title: String?,
     ) {
-        val event = when (state) {
+        // 状态驱动延迟应用：与 BrowserOverlay 的同批 post 保持先后（见类头说明）
+        mainHandler.postDelayed({ applyTransition(stateEventFor(state)) }, STATE_APPLY_DELAY_MS)
+    }
+
+    /** 引擎会话状态 → 实时卡迁移事件（状态回调与仲裁退场重放共用）。 */
+    private fun stateEventFor(state: BrowserEngine.BrowserSessionState): LiveViewEvent =
+        when (state) {
             BrowserEngine.BrowserSessionState.HIDDEN -> LiveViewEvent.STATE_HIDDEN
             BrowserEngine.BrowserSessionState.AGENT_DRIVING -> LiveViewEvent.STATE_DRIVING
             BrowserEngine.BrowserSessionState.WAITING_HUMAN -> LiveViewEvent.STATE_WAITING
             BrowserEngine.BrowserSessionState.RECOVERING -> LiveViewEvent.STATE_RECOVERING
         }
-        // 状态驱动延迟应用：与 BrowserOverlay 的同批 post 保持先后（见类头说明）
-        mainHandler.postDelayed({ applyTransition(event) }, STATE_APPLY_DELAY_MS)
-    }
 
     override fun onActiveTabChanged(webView: WebView?) {
         mainHandler.post { rebindWebView(webView) }
@@ -171,6 +192,12 @@ class LiveViewOverlay private constructor(
 
     /** VISIBLE：建窗（若 GONE）或解除隐身（若 GHOST）+ 换挂 + 启动轮询与呼吸点。 */
     private fun becomeVisible() {
+        // v1.5.0：in-app 承载期间页面在宿主 App 内直接可见 —— 本卡让位 GHOST
+        //（保测量语义交由 in-app 容器承担），仲裁退场时按状态机重放恢复。
+        if (InAppHostingArbiter.isInAppHosting) {
+            becomeGhost()
+            return
+        }
         // 数据级前置：无活动页面（会话从未开启）时无实时画面可示 —— 静默不建空卡
         // （策略层保持纯状态机；「有没有内容可放」属 View 层事实）
         if (engine.activeWebView() == null && engine.currentState == BrowserEngine.BrowserSessionState.HIDDEN) {
@@ -424,6 +451,8 @@ class LiveViewOverlay private constructor(
         val host = webViewHost ?: return
         // 人工接管期间全屏 chrome 独占 WebView，本卡不得抢挂（交还后状态回调再回 VISIBLE）
         if (engine.currentState == BrowserEngine.BrowserSessionState.WAITING_HUMAN) return
+        // v1.5.0：in-app 承载期间 WebView 归宿主 App 容器，本卡不抢挂（轮询自愈同走此口）
+        if (InAppHostingArbiter.isInAppHosting) return
         if (view == null) {
             attachedWebView = null
             return
