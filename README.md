@@ -12,7 +12,7 @@ Embedded WebView automation engine with Compose chrome UI — 从
 |---|---|---|
 | `:browser-core` | 纯 Kotlin JVM（零 Android 依赖） | DOM 模型（`DomElement`/`PageSnapshot`）、注入 JS（`BrowserScript`）、快照解析（`DomParser`）、重试/熔断（`RetryPolicy`/`CircuitBreaker`） |
 | `:browser-engine` | Android Library（无 UI） | 无头 WebView 自动化引擎（`BrowserEngine`）：状态机、标签管理、物理触摸注入、加载等待、Cookie 持久化、崩溃恢复 |
-| `:browser-chrome` | Android Library（Compose UI + 纯 View 实时窗） | 「给人用的浏览器界面」：地址胶囊即进度条、标签条/总览、页内查找、下载面板、JS 弹窗/权限浮层、全屏接管浮窗（`BrowserOverlay`）、透明实时页面悬浮窗（`LiveViewOverlay`，v1.4.0） |
+| `:browser-chrome` | Android Library（Compose UI + 纯 View 实时窗） | 「给人用的浏览器界面」：地址胶囊即进度条、标签条/总览、页内查找、下载面板、JS 弹窗/权限浮层、全屏接管浮窗（`BrowserOverlay`）、透明实时页面悬浮窗（`LiveViewOverlay`，v1.4.0）、App 内嵌浏览器宿主（`InAppChromeHost` + 承载仲裁，v1.5.0） |
 
 依赖方向：`chrome → engine → core`（`api` 传递，下游引 chrome 即得全套类型）。
 
@@ -91,9 +91,9 @@ if (file("../apex-browser-kit").isDirectory) {
 
 ```kotlin
 dependencies {
-    implementation("com.apex.browser:browser-core:1.4.0")
-    implementation("com.apex.browser:browser-engine:1.4.0")
-    implementation("com.apex.browser:browser-chrome:1.4.0")
+    implementation("com.apex.browser:browser-core:1.5.0")
+    implementation("com.apex.browser:browser-engine:1.5.0")
+    implementation("com.apex.browser:browser-chrome:1.5.0")
 }
 ```
 
@@ -310,6 +310,50 @@ Compose UI 层文案继续走 `res/values` + `values-en`（`browser_` 前缀强�
 
 版本：三模块 1.1.0 → **1.2.0**（additive API，全部为带默认值参数的尾参扩展，
 宿主源码兼容）。
+
+## v1.5.0 变更（App 内嵌浏览器宿主 / 三承载面互斥仲裁）
+
+### App 内嵌浏览器宿主（`InAppChromeHost`，新增）
+
+- **零悬浮窗权限的完整浏览器**：本库的可视层此前只有系统悬浮窗
+  （`TYPE_APPLICATION_OVERLAY`，需 `SYSTEM_ALERT_WINDOW` 特殊权限，无权限时
+  静默降级）—— 权限未授予的宿主用户永远看不见浏览器。`InAppChromeHost`
+  把引擎活动 WebView 连同完整 `BrowserChrome` 嵌进宿主 **App 自己的窗口**
+  （Activity 组合树内 `AndroidView` 容器），浏览器从此**无条件可用**；
+- **四动作生命周期**（全主线程）：`attach`（页面进入组合：承载权 claim +
+  wiring resync 对齐 chrome 数据源 + 换挂活动 WebView）/ `detach`（页面离开
+  组合：WebView 归还引擎无头驱动）/ `pause`（Activity ON_PAUSE：让出承载权，
+  悬浮窗可视层可接管）/ `resume`（ON_RESUME：重新换挂）；
+- **换挂走引擎多播**：订阅 `BrowserEngine.ActiveTabListener`（而非 wiring 的
+  单回调 var，不与 `BrowserOverlay` 抢占）—— 标签切换/新建/崩溃重建自动换页；
+- 宿主接法：`InAppChromeHostFactory.get(engine, wiring)` 注册进宿主 DI
+  （与另两个工厂同款单例纪律）。
+
+### P1 渲染修复：接管浮窗「有 chrome 无页面」（`BrowserChrome` 页区透明）
+
+- 旧实现根 Column 恒刷不透明 `palette.background`，而真实 WebView 宿主在
+  **组合树之外**（同窗口兄弟 View 层）—— 不透明底色把 WebView 整个盖住：
+  人工接管浮窗展开后只见地址栏 + 一块纯色页区，**页面内容从未显示过**
+  （ChromeBar / TabStrip 自带不透明底，根底色对头部是冗余双重绘制）；
+- 修复：`BrowserChrome` 新增 `transparentPageArea: Boolean = false`（默认
+  保持旧视觉，页区由 pageSlot 自绘的消费者零影响）；`BrowserOverlay` 传
+  true —— 页区透出真实 WebView，`InAppChromeHost` 消费方同款传法。
+
+### 三承载面互斥仲裁（`InAppHostingArbiter`，新增）
+
+- 同一 WebView 同一时刻只能有一个父容器：in-app 容器 / 全屏接管浮窗 /
+  实时页面卡片三个承载面需要一个进程级裁决点；
+- **in-app 承载期间**：`BrowserOverlay` 的 WAITING_HUMAN 不再自动展开（
+  in-app chrome 就是人的 UI），已展开则收起；`LiveViewOverlay` 可见卡片转
+  GHOST（页面在 App 内直接可见，换挂/自愈同步被守卫拦下，不抢 WebView）；
+- **in-app 退场**（页面离开/Activity 暂停）：接管浮窗按 WAITING_HUMAN 补
+  展开、实时卡片按引擎状态机重放 —— 用户离开 App 后悬浮窗体验不变；
+- 纯 JVM 无 Android 依赖，契约由 `InAppHostingArbiterTest` 八项断言锁定
+  （幂等迁移/通知一次/注销停止/自注销不 CME/异常不传播）。
+
+版本：三模块 1.4.0 → **1.5.0**（additive API；`InAppChromeHost` /
+`InAppChromeHostFactory` / `InAppHostingArbiter` 均为新增，两个既有浮窗仅
+加守卫分支，无破坏性变更）。
 
 ## v1.4.0 变更（实时页面悬浮窗 / 悬浮窗 P0 崩溃修复 / 活动标签广播）
 

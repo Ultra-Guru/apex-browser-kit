@@ -12,10 +12,12 @@ browser-engine :: class BrowserEngine.WaitOutcome(val matched: Boolean, val deta
 browser-engine :: class BrowserTracer(private val capacity: Int = 100)
 browser-engine :: class BrowserTracer.Entry(val timestamp: String, val tool: String, val params: String, val resultSummary: String, val durationMs: Long, val url: String?, val state: String, val error: String? = null,)
 browser-engine :: class OverlayLifecycleOwner : LifecycleOwner, SavedStateRegistryOwner
+browser-engine :: fun BrowserEngine.ActiveTabListener.onActiveTabChanged(webView: WebView?)
 browser-engine :: fun BrowserEngine.BrowserUiCallback.onStateChanged(state: BrowserSessionState, url: String?, title: String?)
 browser-engine :: fun BrowserEngine.PostActionState.toText(): String
 browser-engine :: fun BrowserEngine.activeTab(): Tab?
 browser-engine :: fun BrowserEngine.activeWebView(): WebView?
+browser-engine :: fun BrowserEngine.addActiveTabListener(listener: ActiveTabListener)
 browser-engine :: fun BrowserEngine.addUiCallback(cb: BrowserUiCallback)
 browser-engine :: fun BrowserEngine.assertAgentControl()
 browser-engine :: fun BrowserEngine.clickElement(ref: String): PostActionState
@@ -56,6 +58,7 @@ browser-engine :: fun BrowserEngine.readQuickProbe(wv: WebView): QuickProbe?
 browser-engine :: fun BrowserEngine.recentHistory(limit: Int): List<String>
 browser-engine :: fun BrowserEngine.releaseBrowser()
 browser-engine :: fun BrowserEngine.reload(timeoutMs: Long = 15_000): Boolean
+browser-engine :: fun BrowserEngine.removeActiveTabListener(listener: ActiveTabListener)
 browser-engine :: fun BrowserEngine.removeUiCallback(cb: BrowserUiCallback)
 browser-engine :: fun BrowserEngine.reportDialogForContext(text: String?)
 browser-engine :: fun BrowserEngine.reportDownload(fileName: String, url: String, dmId: Long)
@@ -87,6 +90,8 @@ browser-engine :: fun OverlayLifecycleOwner.onStart()
 browser-engine :: fun OverlayLifecycleOwner.onStop()
 browser-engine :: fun OverlayLifecycleOwner.performRestore()
 browser-engine :: fun WebView .evaluateAsInt(js: String): Int?
+browser-engine :: fun waitConditionLoop(wv: WebView, mode: String, value: String, countPred: CountPredicate?, timeoutMs: Long, pollMs: Long, evaluateBoolean: suspend (WebView, String) -> Boolean, evaluateJson: suspend (WebView, String) -> String,): BrowserEngine.WaitOutcome
+browser-engine :: interface BrowserEngine.ActiveTabListener
 browser-engine :: interface BrowserEngine.BrowserUiCallback
 browser-engine :: object BrowserEngineFactory
 browser-engine :: val BrowserEngine.DownloadRecord.downloadId : Long
