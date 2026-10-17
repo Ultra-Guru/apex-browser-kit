@@ -26,6 +26,7 @@ browser-chrome :: class DownloadState
 browser-chrome :: class EngineSnapshot(val tabs: List<TabCard> = emptyList(), val activeTabId: String? = null, val findState: FindState? = null, val desktopMode: Boolean = false,)
 browser-chrome :: class FindState(val query: String, val activeMatch: Int, val totalMatches: Int,)
 browser-chrome :: class HistoryEntry(val url: String, val title: String, val lastVisitedAt: Long = 0L,)
+browser-chrome :: class InAppChromeHost private constructor(private val engine: BrowserEngine, private val wiring: ApexChromeWiring,) : BrowserEngine.ActiveTabListener
 browser-chrome :: class InMemoryPermissionGrantStore : PermissionGrantStore
 browser-chrome :: class JsDialogBookkeeping
 browser-chrome :: class JsDialogChoice
@@ -33,6 +34,10 @@ browser-chrome :: class JsDialogKind
 browser-chrome :: class JsDialogRequest(val id: String, val kind: JsDialogKind, val originHost: String, val message: String, val promptDefault: String? = null, val routing: JsDialogRouting = JsDialogRouting.HUMAN,)
 browser-chrome :: class JsDialogRouting
 browser-chrome :: class LivePageState(val url: String? = null, val title: String? = null, val isLoading: Boolean = false, val progress: Float = 0f, val canGoBack: Boolean = false, val canGoForward: Boolean = false,)
+browser-chrome :: class LiveViewEvent
+browser-chrome :: class LiveViewMode
+browser-chrome :: class LiveViewOverlay private constructor(private val appContext: Context, private val engine: BrowserEngine,) : BrowserEngine.BrowserUiCallback, BrowserEngine.ActiveTabListener
+browser-chrome :: class LiveViewTransition(val mode: LiveViewMode, val userDismissed: Boolean,)
 browser-chrome :: class NeonChromeWiring(appContext: Context, private val tabOps: TabOperations? = null, searchTemplate: String =, scope: CoroutineScope? = null, private val userAgent: NeonUserAgent = NeonUserAgent(), private val historySource: (suspend (query: String, limit: Int) -> List<HistoryEntry>)? = null, grantStore: PermissionGrantStore? = null,) : PageStateSink
 browser-chrome :: class NeonUserAgent(val mobile: String? = null, val desktop: String = DEFAULT_DESKTOP_UA,)
 browser-chrome :: class PermissionDecision
@@ -210,6 +215,19 @@ browser-chrome :: fun EngineCommands.setDesktopMode(enabled: Boolean)
 browser-chrome :: fun EngineCommands.stopLoading()
 browser-chrome :: fun EngineCommands.switchTab(tabId: String)
 browser-chrome :: fun EnglishChromeStrings.tabSwitchHint(host: String): String
+browser-chrome :: fun InAppChromeHost.attach(container: FrameLayout)
+browser-chrome :: fun InAppChromeHost.detach()
+browser-chrome :: fun InAppChromeHost.onActiveTabChanged(webView: WebView?)
+browser-chrome :: fun InAppChromeHost.pause()
+browser-chrome :: fun InAppChromeHost.resume()
+browser-chrome :: fun InAppChromeHostFactory.get(engine: BrowserEngine, wiring: ApexChromeWiring): InAppChromeHost
+browser-chrome :: fun InAppChromeHostFactory.reset()
+browser-chrome :: fun InAppHostingArbiter.Listener.onInAppHostingChanged(active: Boolean)
+browser-chrome :: fun InAppHostingArbiter.addListener(listener: Listener)
+browser-chrome :: fun InAppHostingArbiter.claim()
+browser-chrome :: fun InAppHostingArbiter.release()
+browser-chrome :: fun InAppHostingArbiter.removeListener(listener: Listener)
+browser-chrome :: fun InAppHostingArbiter.resetForTest()
 browser-chrome :: fun InMemoryPermissionGrantStore.isGranted(originHost: String, resource: WebPermissionResource): Boolean
 browser-chrome :: fun InMemoryPermissionGrantStore.remember(originHost: String, resources: Set<WebPermissionResource>)
 browser-chrome :: fun InMemoryPermissionGrantStore.rememberedOrigins(): Map<String, Set<WebPermissionResource>>
@@ -219,6 +237,14 @@ browser-chrome :: fun JsDialogBookkeeping.pendingCount(): Int
 browser-chrome :: fun JsDialogBookkeeping.resolve(requestId: String, choice: JsDialogChoice, promptValue: String?, routeToAgent: Boolean,)
 browser-chrome :: fun JsDialogBookkeeping.submit(kind: JsDialogKind, originHost: String, message: String, promptDefault: String?, replay: Replay,): String
 browser-chrome :: fun JsDialogHost(gateway: BrowserEngineGateway, config: ChromeConfig = ChromeConfig(),)
+browser-chrome :: fun LiveViewOverlay.hideByUser()
+browser-chrome :: fun LiveViewOverlay.onActiveTabChanged(webView: WebView?)
+browser-chrome :: fun LiveViewOverlay.onStateChanged(state: BrowserEngine.BrowserSessionState, url: String?, title: String?,)
+browser-chrome :: fun LiveViewOverlay.show()
+browser-chrome :: fun LiveViewOverlay.toggle()
+browser-chrome :: fun LiveViewOverlayFactory.get(context: Context, engine: BrowserEngine): LiveViewOverlay
+browser-chrome :: fun LiveViewOverlayFactory.reset()
+browser-chrome :: fun LiveViewPolicy.resolve(event: LiveViewEvent, mode: LiveViewMode, userDismissed: Boolean,): LiveViewTransition
 browser-chrome :: fun NeonChromeWiring.bindActiveWebView(view: WebView, existingWebViewClient: WebViewClient? = null, existingWebChromeClient: WebChromeClient? = null,)
 browser-chrome :: fun NeonChromeWiring.onFindResult(view: WebView, activeMatchOrdinal: Int, numberOfMatches: Int, isDoneCounting: Boolean)
 browser-chrome :: fun NeonChromeWiring.onPageFinished(view: WebView, url: String?)
@@ -269,6 +295,7 @@ browser-chrome :: interface BrowserVisualHook
 browser-chrome :: interface ChromeMenuAction
 browser-chrome :: interface ChromeStrings
 browser-chrome :: interface EngineCommands
+browser-chrome :: interface InAppHostingArbiter.Listener
 browser-chrome :: interface JsDialogBookkeeping.Replay
 browser-chrome :: interface PageStateSink
 browser-chrome :: interface PermissionGrantStore
@@ -286,6 +313,10 @@ browser-chrome :: object ChromeMenuAction.OpenExternal : ChromeMenuAction
 browser-chrome :: object ChromeMenuAction.ShowTabs : ChromeMenuAction
 browser-chrome :: object ChromeMenuAction.Userscripts : ChromeMenuAction
 browser-chrome :: object EnglishChromeStrings : ChromeStrings
+browser-chrome :: object InAppChromeHostFactory
+browser-chrome :: object InAppHostingArbiter
+browser-chrome :: object LiveViewOverlayFactory
+browser-chrome :: object LiveViewPolicy
 browser-chrome :: object PermissionGate
 browser-chrome :: object SnapshotComposer
 browser-chrome :: object SuggestionsBuilder
@@ -394,6 +425,7 @@ browser-chrome :: val FindState.totalMatches : Int
 browser-chrome :: val HistoryEntry.lastVisitedAt : Long
 browser-chrome :: val HistoryEntry.title : String
 browser-chrome :: val HistoryEntry.url : String
+browser-chrome :: val InAppHostingArbiter.isInAppHosting : Boolean get()
 browser-chrome :: val JsDialogBookkeeping.requests : StateFlow<List<JsDialogRequest>>
 browser-chrome :: val JsDialogRequest.id : String
 browser-chrome :: val JsDialogRequest.kind : JsDialogKind
@@ -407,6 +439,9 @@ browser-chrome :: val LivePageState.isLoading : Boolean
 browser-chrome :: val LivePageState.progress : Float
 browser-chrome :: val LivePageState.title : String?
 browser-chrome :: val LivePageState.url : String?
+browser-chrome :: val LiveViewOverlay.isShowing : Boolean get()
+browser-chrome :: val LiveViewTransition.mode : LiveViewMode
+browser-chrome :: val LiveViewTransition.userDismissed : Boolean
 browser-chrome :: val LocalChromePalette
 browser-chrome :: val NeonChromeWiring.adapter
 browser-chrome :: val NeonChromeWiring.downloads
