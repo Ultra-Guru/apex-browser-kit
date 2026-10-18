@@ -105,4 +105,40 @@
     <string name="browser_live_close_cd">Collapse the live view overlay</string>
     <string name="browser_live_resize_cd">Drag to resize the live view window</string>
     <string name="browser_live_url_empty">Live view · waiting for the Agent to browse</string>
+    <!-- v1.7.0 session enhancements (bookmarks / reader mode / display settings / clean link) -->
+    <string name="browser_menu_bookmarks">Bookmarks</string>
+    <string name="browser_menu_reader_mode">Reader mode</string>
+    <string name="browser_menu_display_settings">Display settings</string>
+    <string name="browser_menu_copy_clean_link">Copy clean link</string>
+    <string name="browser_bookmarks_title">Bookmarks</string>
+    <string name="browser_bookmarks_empty">No bookmarks yet. Tap "Bookmark this page" above, or ask the Agent to use the BrowserBookmarks tool.</string>
+    <string name="browser_bookmarks_no_match">No matching bookmarks.</string>
+    <string name="browser_bookmarks_add_current">Bookmark this page</string>
+    <string name="browser_bookmarks_search_hint">Search bookmarks (title / site / URL)</string>
+    <string name="browser_bookmarks_folder_root">Root</string>
+    <string name="browser_bookmark_delete">Delete bookmark</string>
+    <string name="browser_reader_title">Reader mode</string>
+    <string name="browser_reader_empty">This page has no structured article content (tool / login / empty page), not suitable for Reader Mode.</string>
+    <string name="browser_reader_close">Exit reader mode</string>
+    <string name="browser_reader_font_larger">Increase font size</string>
+    <string name="browser_reader_font_smaller">Decrease font size</string>
+    <string name="browser_reader_minutes">~%1$d min read</string>
+    <string name="browser_reader_image">Image: %1$s</string>
+    <string name="browser_display_title">Display settings</string>
+    <string name="browser_display_text_zoom">Text zoom</string>
+    <string name="browser_display_text_zoom_value">%1$d%%</string>
+    <string name="browser_display_force_dark">Night mode</string>
+    <string name="browser_display_force_dark_desc">Algorithmic color inversion (images stay true)</string>
+    <string name="browser_display_clear_data">Clear browsing data</string>
+    <string name="browser_clear_cookies">Cookies (all sites)</string>
+    <string name="browser_clear_cookies_desc">Signs you out of every website</string>
+    <string name="browser_clear_caches">Caches</string>
+    <string name="browser_clear_caches_desc">Free storage; pages re-download next visit</string>
+    <string name="browser_clear_histories">History</string>
+    <string name="browser_clear_histories_desc">Clears page navigation history (not address-bar suggestions)</string>
+    <string name="browser_clear_confirm">Clear</string>
+    <string name="browser_clear_confirm_title">Clear browsing data?</string>
+    <string name="browser_clear_confirm_desc">This cannot be undone. Clearing cookies signs you out of all sites.</string>
+    <string name="browser_snack_clean_link_copied">Clean link copied (%1$d tracking parameters removed)</string>
+
 </resources>

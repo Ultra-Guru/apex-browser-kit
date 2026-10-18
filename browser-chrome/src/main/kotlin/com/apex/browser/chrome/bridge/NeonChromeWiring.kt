@@ -73,6 +73,8 @@ class NeonChromeWiring(
     private val historySource: (suspend (query: String, limit: Int) -> List<HistoryEntry>)? = null,
     /** P1：权限「总是允许」持久化；传 SharedPreferencesGrantStore(context) 即跨会话生效。 */
     grantStore: PermissionGrantStore? = null,
+    /** v1.7.0：会话增强能力束（书签 / 显示设置 / 阅读模式）；null = 能力未接线。 */
+    private val sessionControls: ChromeSessionControls? = null,
 ) : PageStateSink {
 
     private val ownsScope = scope == null
@@ -90,6 +92,7 @@ class NeonChromeWiring(
         searchTemplate = searchTemplate,
         snapshotSource = null,
         historySource = historySource,
+        sessionControls = sessionControls,
     )
 
     /** Chrome 层唯一入口。 */
@@ -193,6 +196,9 @@ class NeonChromeWiring(
 
     override fun onPageFinished(view: WebView, url: String?) {
         if (view !== boundView) return
+        // v1.7.0：导航重置 JS 上下文后重放显示偏好（夜间模式的 style 节点
+        // 随导航消失；textZoom 是 settings 级、重放幂等零成本）
+        sessionControls?.reapplyForLoadedPage()
         live = live.copy(
             url = url ?: live.url,
             isLoading = false,

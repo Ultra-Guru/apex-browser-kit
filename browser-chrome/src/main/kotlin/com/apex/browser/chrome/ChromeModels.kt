@@ -75,14 +75,33 @@ data class Suggestion(
     val tabId: String? = null,
 )
 
-/** Chrome 层的三种浮层。 */
-enum class ChromeSheet { TABS, DOWNLOADS, SCRIPTS }
+/** Chrome 层的三种浮层（v1.7.0 新增书签 / 显示设置）。 */
+enum class ChromeSheet { TABS, DOWNLOADS, SCRIPTS, BOOKMARKS, DISPLAY }
 
 /** 轻提示。 */
 data class ChromeSnackBar(
     val message: String,
     val actionLabel: String? = null,
     val onAction: (() -> Unit)? = null,
+)
+
+/* ---------------- 书签（v1.7.0；引擎侧 BookmarkStore 的 chrome 视图模型） ---------------- */
+
+/** 书签的 chrome 视图模型（与引擎 Bookmark 的差异：仅暴露 UI 需要的字段）。 */
+data class ChromeBookmark(
+    val id: String,
+    val url: String,
+    val title: String,
+    val folder: String,
+    val host: String,
+)
+
+/* ---------------- 显示设置（v1.7.0） ---------------- */
+
+/** 页面显示偏好（文字缩放 / 夜间模式）的 chrome 视图模型。 */
+data class ChromeDisplaySettings(
+    val textZoomPercent: Int = 100,
+    val forceDark: Boolean = false,
 )
 
 /** Chrome 层聚合后的完整 UI 状态。 */
@@ -97,6 +116,12 @@ data class ChromeUiState(
     val sheet: ChromeSheet? = null,
     val desktopMode: Boolean = false,
     val tabStripVisible: Boolean = false,
+    /** 阅读模式全屏层可见（v1.7.0）。 */
+    val readerVisible: Boolean = false,
+    /** 书签能力已接线（引擎侧 BookmarkStore 存在）时为 true（v1.7.0）。 */
+    val bookmarksAvailable: Boolean = false,
+    /** 显示设置能力已接线（EngineDisplayController 存在）时为 true（v1.7.0）。 */
+    val displaySettingsAvailable: Boolean = false,
 )
 
 /** Chrome 层行为开关（全部有默认值，可零配置接入）。 */
@@ -201,4 +226,12 @@ sealed interface ChromeMenuAction {
     object Downloads : ChromeMenuAction
     object Userscripts : ChromeMenuAction
     object OpenExternal : ChromeMenuAction
+    /** v1.7.0：打开书签面板（能力未接线时菜单项自动隐藏）。 */
+    object Bookmarks : ChromeMenuAction
+    /** v1.7.0：打开阅读模式全屏层。 */
+    object ReaderMode : ChromeMenuAction
+    /** v1.7.0：打开显示设置面板（文字缩放 / 夜间模式 / 清除数据）。 */
+    object DisplaySettings : ChromeMenuAction
+    /** v1.7.0：复制「干净链接」（剔除跟踪参数）——剪贴板操作由 ChromeBar 宿主回调执行。 */
+    object CopyCleanLink : ChromeMenuAction
 }
