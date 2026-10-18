@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # 全量历史：git tag --list 必须看得到全部远端 tag 才能正确判幂等
           fetch-depth: 0

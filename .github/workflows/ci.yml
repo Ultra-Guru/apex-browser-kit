@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -44,7 +44,7 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Build all modules (compile only first for fast feedback)
         run: ./gradlew assemble --no-daemon --stacktrace
@@ -77,7 +77,7 @@ jobs:
 
       - name: Upload test reports on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-reports
           path: |
@@ -93,24 +93,57 @@ jobs:
     steps:
       # 兄弟布局：host-app/ + apex-browser-kit/ —— 宿主的条件 includeBuild 命中
       - name: Checkout apex-browser-kit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: apex-browser-kit
 
       - name: Checkout host app (Android-Guru-Agent)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: Ultra-Guru/Android-Guru-Agent
           path: host-app
           # 公开仓库只读 checkout，无需 PAT
 
+      # ── 兄弟库补齐检出（宿主多库 composite build 全量接线）──────────────────
+      # 宿主 settings.gradle.kts 同时条件接线三个 kit（browser/standard/workspace）
+      # 且 com.apex.* 坐标无任何远端仓库可解析 —— 缺任何一个兄弟目录，宿主 app 的
+      # 依赖解析直接失败（PR #19 首次暴露：workspace/standard 缺件 →
+      # "Could not find com.apex.workspace:workspace-core"）。按「宿主 lock 优先、
+      # 缺锁回退 main」钉住兄弟库版本 —— 与宿主自身 CI 的 pinned checkout 同源，
+      # 保证消费验证可复现（被测库 = 本 PR 检出；兄弟库 = 宿主锁定的已知好版本）。
+      - name: Resolve sibling kit pins from host locks
+        id: host-pins
+        run: |
+          set -euo pipefail
+          STD=$(head -n 1 host-app/gradle/standard-kit.lock 2>/dev/null || echo main)
+          WSP=$(head -n 1 host-app/gradle/workspace-kit.lock 2>/dev/null || echo main)
+          echo "standard-kit=$STD" >> "$GITHUB_OUTPUT"
+          echo "workspace-kit=$WSP" >> "$GITHUB_OUTPUT"
+          echo "sibling pins: standard-kit=${STD:0:12} workspace-kit=${WSP:0:12}"
+
+      - name: Checkout apex-standard-kit (pinned by host lock)
+        uses: actions/checkout@v7
+        with:
+          repository: Ultra-Guru/apex-standard-kit
+          path: apex-standard-kit
+          ref: ${{ steps.host-pins.outputs.standard-kit }}
+
+      - name: Checkout apex-workspace-kit (pinned by host lock)
+        uses: actions/checkout@v7
+        with:
+          repository: Ultra-Guru/apex-workspace-kit
+          path: apex-workspace-kit
+          ref: ${{ steps.host-pins.outputs.workspace-kit }}
+
       - name: Verify composite-build wiring exists in host
         run: |
-          if ! grep -q "apex-browser-kit" host-app/settings.gradle.kts; then
-            echo "::error::宿主 settings.gradle.kts 缺少 apex-browser-kit 的 includeBuild 接线（composite build 前置条件）"
-            exit 1
-          fi
-          echo "✅ 宿主已包含条件 includeBuild 接线"
+          for kit in apex-browser-kit apex-standard-kit apex-workspace-kit; do
+            if ! grep -q "$kit" host-app/settings.gradle.kts; then
+              echo "::error::宿主 settings.gradle.kts 缺少 $kit 的 includeBuild 接线（composite build 前置条件）"
+              exit 1
+            fi
+          done
+          echo "✅ 宿主已包含三 kit 条件 includeBuild 接线（browser/standard/workspace）"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -128,7 +161,7 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > host-app/local.properties
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Verify composite build substitution resolves
         working-directory: host-app
