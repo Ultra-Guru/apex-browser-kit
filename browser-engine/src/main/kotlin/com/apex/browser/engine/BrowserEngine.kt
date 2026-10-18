@@ -28,13 +28,17 @@ import com.apex.browser.core.ElementNotFoundException
 import com.apex.browser.core.PageClassifier
 import com.apex.browser.core.PageClassifier.PageTypeInfo
 import com.apex.browser.core.PageSnapshot
+import com.apex.browser.core.PermanentActionException
 import com.apex.browser.core.RetryPolicy
 import com.apex.browser.core.withRetry
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -116,6 +120,35 @@ class BrowserEngine private constructor(
         uiCallbacks.remove(cb)
     }
 
+    // ───────── 活动标签通知（v1.4.0：实时页面悬浮窗的数据源） ─────────
+    /**
+     * 活动标签变化订阅者（标签新建/切换/关闭回落/崩溃重建/导航重建都会触发）。
+     *
+     * 与 [BrowserUiCallback] 的分工：后者只管会话状态机迁移（HIDDEN/DRIVING/
+     * WAITING_HUMAN/RECOVERING），而 Agent 驾驶期间 browser_switch_tab /
+     * browser_new_tab 等工具换页不产生状态迁移——可视层（如实时页面悬浮窗）
+     * 若只订状态就拿不到新 WebView。本回调把「当前应展示哪个 WebView」的变化
+     * 单独广播，通知必须已在主线程（与标签管理方法同线程约定）。
+     */
+    interface ActiveTabListener {
+        fun onActiveTabChanged(webView: WebView?)
+    }
+
+    @Volatile
+    private var activeTabListeners = CopyOnWriteArraySet<ActiveTabListener>()
+
+    /** 注册活动标签订阅者（实时页面悬浮窗、霓虹球等可视层）。 */
+    fun addActiveTabListener(listener: ActiveTabListener) { activeTabListeners.add(listener) }
+
+    /** 注销活动标签订阅者。 */
+    fun removeActiveTabListener(listener: ActiveTabListener) { activeTabListeners.remove(listener) }
+
+    /** 统一活动页通知出口：活动 WebView 实例变化时广播（含变 null 的会话收尾）。 */
+    private fun notifyActiveTabChanged() {
+        val view = activeWebView()
+        activeTabListeners.forEach { runCatching { it.onActiveTabChanged(view) } }
+    }
+
     /** 统一状态出口：所有状态变更必须经此，以驱动可视层 */
     private fun setState(next: BrowserSessionState) {
         currentState = next
@@ -151,6 +184,14 @@ class BrowserEngine private constructor(
     private val retryPolicy = RetryPolicy()
     private val breaker = CircuitBreaker()
 
+    /**
+     * v1.3.0 可观测性接线（公开属性）：关键动作（navigate/click/input/select/
+     * scroll/snapshot）成功/失败边界与系统事件（渲染崩溃/SSL 拦截/弹窗自动确认/
+     * 下载入队）统一入 trace——动作边界包装见同包 internal 扩展
+     * `tracedAction`（EngineTracing.kt）。宿主可读 [BrowserTracer.recent] /
+     * [BrowserTracer.contextSummary]，或订阅 [BrowserTracer.events] 实时消费。
+     */
+    val tracer = BrowserTracer()
 
     /** 文件上传回调挂起（[onShowFileChooser] ↔ [respondFileChooser]） */
     private var pendingFileChooser: ValueCallback<Array<android.net.Uri>>? = null
@@ -197,6 +238,12 @@ class BrowserEngine private constructor(
             ?.replace("Version/4.0 ", "")
 
         wv.webViewClient = object : WebViewClient() {
+            // v1.3.0 修复 goBack/goForward 后状态残留：pageFinished 若不复位，
+            // 新导航的 waitForPageFinished 会因旧页遗留的 true 立即「假就绪」。
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                tabs.values.firstOrNull { it.webView === view }?.pageFinished = false
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 url?.let {
                     val tab = activeTab()
@@ -207,13 +254,21 @@ class BrowserEngine private constructor(
                         if (history.size > MAX_HISTORY) history.removeFirst()
                     }
                 }
-                // 反检测（#13）：每次页面加载完成注入隐身 JS，隐藏自动化痕迹
-                view?.evaluateJavascript(STEALTH_JS, null)
+                // 反检测（#13）：每次页面加载完成注入隐身 JS，隐藏自动化痕迹。
+                // v1.3.0 修 B10：导航会重置 JS 上下文，网络监控随之丢失（下次
+                // snapshot 才补注入，监控存在盲区）—— 与 NETWORK_MONITOR_JS 合并
+                // 注入（监控自带 __apexNetHooked 幂等守卫，重复注入无害）。
+                view?.evaluateJavascript(BrowserScript.STEALTH_JS + "\n" + BrowserScript.NETWORK_MONITOR_JS, null)
             }
 
             // P0 #4：渲染进程崩溃恢复
             override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
                 val gone = detail?.didCrash() ?: true
+                // v1.3.0：系统事件入 trace（可观测性接线）
+                tracer.record(
+                    "system.render_gone", "didCrash=$gone",
+                    "渲染进程崩溃，已销毁重建 WebView", 0, view?.url, currentState.name,
+                )
                 // 重建：销毁崩溃实例并新建（Chromium 建议崩溃后重建，勿直接复用）
                 tabs.values.filter { it.webView === view }.forEach { bad ->
                     bad.webView.destroy()
@@ -226,6 +281,8 @@ class BrowserEngine private constructor(
                 // 通知由调用方在 next snapshot/navigate 时感知；此处仅标记恢复
                 Handler(Looper.getMainLooper()).post {
                     setState(BrowserSessionState.RECOVERING)
+                    // 崩溃重建：活动 WebView 已换新实例，实时悬浮窗同步换挂
+                    notifyActiveTabChanged()
                 }
                 return true // 已处理，不 crash 宿主
             }
@@ -243,6 +300,11 @@ class BrowserEngine private constructor(
             // WebView 默认即对 SSL 错误取消，此处显式重写以保持可审计、可一致行为。
             override fun onReceivedSslError(view: WebView?, handler: android.webkit.SslErrorHandler?, error: android.net.http.SslError?) {
                 lastDialog = "ssl_error: 证书校验失败（${error?.primaryError}），已取消加载"
+                // v1.3.0：系统事件入 trace（可观测性接线）
+                tracer.record(
+                    "system.ssl_blocked", "primaryError=${error?.primaryError}",
+                    "SSL 证书校验失败，已取消加载（不自动信任）", 0, view?.url, currentState.name,
+                )
                 handler?.cancel() // 严禁 handler.proceed()
             }
         }
@@ -262,6 +324,11 @@ class BrowserEngine private constructor(
             ): Boolean {
                 // 默认确认；Agent 可通过 browser_dialog 工具在确认前拦截（此处保守确认以免卡死）
                 lastDialog = "confirm: ${message ?: ""}"
+                // v1.3.0：自动确认属于不可观察的静默行为，入 trace 留痕
+                tracer.record(
+                    "system.dialog_auto_confirmed", "type=confirm",
+                    "已自动确认 confirm 弹窗：${message ?: ""}", 0, url, currentState.name,
+                )
                 result?.confirm()
                 return true
             }
@@ -273,6 +340,17 @@ class BrowserEngine private constructor(
                 lastDialog = "prompt: ${message ?: ""}"
                 result?.confirm(defaultValue ?: "")
                 return true
+            }
+
+            // v1.3.0 修复：标题此前从未被任何 client 更新（tab.title 只在快照时被动读取），
+            // PageSnapshot.title 恒为空串，SPA 动态标题（document.title 变更）也反映不到
+            // tabsSnapshot / 浮窗地址栏 / PostActionState.pageTitle。
+            // 注：onReceivedTitle 是 WebChromeClient 回调（放在 WebViewClient 里
+            // 会「overrides nothing」编译失败）。
+            override fun onReceivedTitle(view: WebView?, title: String?) {
+                if (!title.isNullOrBlank()) {
+                    tabs.values.firstOrNull { it.webView === view }?.title = title
+                }
             }
 
             // P0 #5（文件上传）：拦截系统文件选择器
@@ -324,6 +402,9 @@ class BrowserEngine private constructor(
             val req = DownloadManager.Request(Uri.parse(url)).apply {
                 setMimeType(mimeType)
                 addRequestHeader("User-Agent", userAgent)
+                // v1.3.0：转发会话 Cookie —— 登录态后的下载（导出报表/附件）常因
+                // DownloadManager 无 Cookie 而 401/重定向到登录页。
+                CookieManager.getInstance().getCookie(url)?.let { addRequestHeader("Cookie", it) }
                 setTitle(fileName)
                 setDescription("Apex Browser 下载")
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -334,6 +415,11 @@ class BrowserEngine private constructor(
             runCatching { dm.enqueue(req) }.onSuccess { id ->
                 lastDownload = DownloadRecord(fileName, url, id)
                 lastDialog = "download: 已开始下载 $fileName"
+                // v1.3.0：系统事件入 trace（可观测性接线）
+                tracer.record(
+                    "system.download_enqueued", "file=$fileName",
+                    "下载已入队 id=$id", 0, url, currentState.name,
+                )
             }.onFailure {
                 lastDownload = null
                 lastDialog = "download: 下载失败 ${it.message}"
@@ -398,6 +484,8 @@ class BrowserEngine private constructor(
     fun newTabImmediate(url: String?): Int {
         val id = newTabSync()
         activeTabId = id
+        // v1.4.0：活动 WebView 变化（含首建页）→ 实时页面悬浮窗换挂
+        notifyActiveTabChanged()
         url?.let {
             // 带 URL 建页 = 浏览器被使用（网页搜索/自动化），驱动霓虹球按需出现
             markBrowserActiveFromHidden()
@@ -421,6 +509,7 @@ class BrowserEngine private constructor(
         val wv = createWebView()
         tabs[old.id] = old.copy(webView = wv, pageFinished = false)
         if (url.isNotBlank()) wv.loadUrl(url)
+        notifyActiveTabChanged()
     }
 
     /** 由 DI 构造器注入的 Application Context（避免在引擎内直接持 Activity） */
@@ -488,13 +577,19 @@ class BrowserEngine private constructor(
     fun switchTab(id: Int): Boolean {
         if (!tabs.containsKey(id)) return false
         activeTabId = id
+        // Agent 驾驶中的换页不产生状态迁移，单独广播让实时悬浮窗换挂 WebView
+        notifyActiveTabChanged()
         return true
     }
 
     fun closeTab(id: Int): Boolean {
         val tab = tabs.remove(id) ?: return false
         tab.webView.destroy()
-        if (activeTabId == id) activeTabId = tabs.keys.firstOrNull() ?: 0
+        if (activeTabId == id) {
+            activeTabId = tabs.keys.firstOrNull() ?: 0
+            // 关掉的是活动页：活动 WebView 回落/变空，实时悬浮窗需同步换挂或清空
+            notifyActiveTabChanged()
+        }
         return true
     }
 
@@ -511,7 +606,8 @@ class BrowserEngine private constructor(
         waitForSelector: String? = null,
         timeoutMs: Long = 15000,
         onProgress: ((percent: Int, phase: String) -> Unit)? = null,
-    ): NavResult = withContext(Dispatchers.Main) {
+    ): NavResult = tracedAction("browser_navigate", "url=$url wait=${waitForSelector ?: "-"}") {
+        withContext(Dispatchers.Main) {
         val u = if (url.startsWith("http")) url else "https://$url"
         // 导航即"浏览器被使用"：HIDDEN → AGENT_DRIVING，霓虹球据此按需出现
         // （不是 App 启动就常驻；用户长按球或 releaseBrowser 后回到 HIDDEN 即收起）
@@ -536,6 +632,7 @@ class BrowserEngine private constructor(
         flushCookies()
         onProgress?.invoke(100, if (baseOk) "页面加载完成" else "页面加载超时（已兜底返回当前状态）")
         NavResult(success = baseOk, selectorFound = selOk, timedOut = !baseOk)
+        }
     }
 
     data class NavResult(val success: Boolean, val selectorFound: Boolean, val timedOut: Boolean)
@@ -586,11 +683,22 @@ class BrowserEngine private constructor(
      *
      * [BrowserEngine.navigate] 的 waitForSelector 只覆盖「导航后」窗口；
      * 点击/提交后的异步内容到达（SPA 局部刷新、搜索结果、登录跳转）没有
-     * 等待手段——旧方案只能盲 sleep 或反复 snapshot 轮询。本方法补齐三态：
+     * 等待手段——旧方案只能盲 sleep 或反复 snapshot 轮询。v1.3.0 模式从 3 种
+     * 扩到 7 种：
      *  - `selector`：CSS 选择器出现（同步检查 + 轮询，不经 Promise——
      *    evaluateJavascript 不等待 Promise 完成，异步形态拿到的恒为 null）；
      *  - `text`：页面可见文本包含子串；
-     *  - `url`：当前 URL 包含子串（跳转完成判定）。
+     *  - `url`：当前 URL 包含子串（跳转完成判定）——v1.3.0 起改注入
+     *    [BrowserScript.CURRENT_URL_JS] 求值：SPA pushState/replaceState 即时
+     *   反映到 location.href，而 native `webView.url` 只在导航提交时更新；
+     *  - `element_gone`：选择器从 DOM 消失（弹窗/加载态收起判定，selector 取反）；
+     *  - `text_gone`：文本从页面消失（text 取反，如「加载中…」消失）；
+     *  - `network_idle`：在途请求数归零（[BrowserScript.networkIdleJs] 轮询，
+     *    **连续 2 次为 0** 才算 idle——单次 0 可能只是两次请求的间隙）；
+     *  - `selector_count`：选择器命中数满足谓词。value = "<选择器>" + 计数谓词：
+     *    `">=10"` / `"<=5"` / `"==3"` / `">N"` / `"<N"`，或纯数字（要求与
+     *    选择器间有空白，语义为 `>=`，「等到至少 N 个」是等待场景的主导用法；
+     *    空白要求避免与 `.item2` 这类以数字结尾的选择器歧义）。
      *
      * 轮询 [pollMs]（默认 300ms）+ 总超时 [timeoutMs]（默认 10s，上限 60s
      * 防呆）；在 Main dispatcher 执行（WebView 约束），每次检查为一次
@@ -604,28 +712,27 @@ class BrowserEngine private constructor(
     ): WaitOutcome = withContext(Dispatchers.Main) {
         val tab = activeTab()
             ?: return@withContext WaitOutcome(false, "no active tab", 0)
-        if (mode != "selector" && mode != "text" && mode != "url") {
-            return@withContext WaitOutcome(false, "unknown mode '$mode' (use selector|text|url)", 0)
+        if (mode !in WAIT_MODES) {
+            return@withContext WaitOutcome(false, "unknown mode '$mode' (use selector|text|url|element_gone|text_gone|network_idle|selector_count)", 0)
         }
-        val effectiveTimeout = timeoutMs.coerceIn(500, 60_000)
-        val start = SystemClock.uptimeMillis()
-        while (SystemClock.uptimeMillis() - start < effectiveTimeout) {
-            val hit = when (mode) {
-                "selector" -> runCatching {
-                    evaluateBoolean(tab.webView, BrowserScript.selectorPresentJs(value))
-                }.getOrDefault(false)
-                "text" -> runCatching {
-                    evaluateBoolean(tab.webView, BrowserScript.textContainsJs(value))
-                }.getOrDefault(false)
-                else -> tab.webView.url?.contains(value, ignoreCase = true) == true
-            }
-            if (hit) return@withContext WaitOutcome(true, "matched $mode", SystemClock.uptimeMillis() - start)
-            delay(pollMs.coerceIn(100, 2000))
+        // selector_count 谓词只解析一次；解析失败立即返回可诊断错误而非静默超时
+        val countPred = if (mode == "selector_count") parseCountPredicate(value) else null
+        if (mode == "selector_count" && countPred == null) {
+            return@withContext WaitOutcome(false, "invalid selector_count value '$value' (expect '<selector>>=10' / '<selector> 10')", 0)
         }
-        WaitOutcome(
-            false,
-            "timeout (${effectiveTimeout}ms) waiting for $mode '$value'",
-            SystemClock.uptimeMillis() - start
+        val wv = tab.webView
+        // 预算纪律（GATE 1，同 CountPredicate 先例）：轮询循环本体迁
+        // WaitPredicates.kt（纯代码搬移；evaluateBoolean/evaluateJson 以 lambda
+        // 注入，私有可见性不外泄）
+        waitConditionLoop(
+            wv = wv,
+            mode = mode,
+            value = value,
+            countPred = countPred,
+            timeoutMs = timeoutMs,
+            pollMs = pollMs,
+            evaluateBoolean = { view, js -> evaluateBoolean(view, js) },
+            evaluateJson = { view, js -> evaluateJson(view, js) },
         )
     }
 
@@ -662,6 +769,47 @@ class BrowserEngine private constructor(
         false
     }
 
+    /**
+     * 重载当前页（v1.3.0）：reload + [waitForPageFinished] 语义，返回超时窗口内
+     * 是否完成加载。此前宿主只能裸调 `webView.reload()`，无等待、无就绪信号。
+     */
+    suspend fun reload(timeoutMs: Long = 15_000): Boolean = withContext(Dispatchers.Main) {
+        val tab = activeTab() ?: return@withContext false
+        tab.pageFinished = false
+        tab.webView.reload()
+        waitForPageFinished(tab, timeoutMs)
+    }
+
+    /**
+     * 停止当前页加载（v1.3.0）：浏览器「停止」按钮 / Agent 逃生舱（长加载页先 stop
+     * 再 snapshot 拿已到内容）。须在主线程调用（与 [performMaintenance]/[destroy] 同约定）。
+     */
+    fun stopLoading() {
+        activeTab()?.webView?.stopLoading()
+    }
+
+    /**
+     * 页内查找（v1.3.0）：`findAllAsync` + FindListener 桥接，返回命中数。
+     *
+     * 取代裸调 `webView.findAllAsync`（无返回值）与 deprecated 的同步 `findAll`。
+     * 注意 WebView 的 FindListener 是**单槽**：本调用会替换 chrome 层
+     * ChainFindListener 的注册——Agent 侧查找计数优先，chrome 页内查找的计数
+     * 回填依赖其下次接线时重设监听器（已知取舍）。
+     */
+    suspend fun findInPage(query: String): Int = withContext(Dispatchers.Main) {
+        val wv = activeTab()?.webView ?: return@withContext 0
+        runCatching {
+            kotlinx.coroutines.withTimeout(8000) {
+                suspendCancellableCoroutine { cont ->
+                    wv.setFindListener { _, numberOfMatches, isDoneCounting ->
+                        if (isDoneCounting && cont.isActive) cont.resume(numberOfMatches)
+                    }
+                    wv.findAllAsync(query)
+                }
+            }
+        }.getOrDefault(0)
+    }
+
     // ═════════ 快照 ═════════
 
     /**
@@ -674,10 +822,11 @@ class BrowserEngine private constructor(
         tokenBudget: Int = 1600,
         strategy: DomParser.SnapshotStrategy = DomParser.SnapshotStrategy.INTERACTIVE_ONLY,
         allowA11yFallback: Boolean = true,
-    ): PageSnapshot = withContext(Dispatchers.Main) {
+    ): PageSnapshot = tracedAction("browser_snapshot", "budget=$tokenBudget strategy=$strategy") {
+        withContext(Dispatchers.Main) {
         val tab = activeTab() ?: return@withContext emptySnapshot()
         // P1 #7：快照超时视为可重试（主线程偶发卡顿），熔断保护
-        withRetry(retryPolicy, breaker) {
+        val snap = withRetry(retryPolicy, breaker) {
             // 注入网络监控（#18），首次快照时挂载一次即可
             runCatching { tab.webView.evaluateJavascript(BrowserScript.NETWORK_MONITOR_JS, null) }
             var wrapped = evaluateSnapshotJs(tab.webView, strategy)
@@ -722,15 +871,33 @@ class BrowserEngine private constructor(
             }
             snap
         }
+        // v1.3.0 快照融合：时间戳 + 弹窗通知（消费即清）。lastDialog 非空时写入
+        // 本次快照并随即清空——模型在下一次 snapshot 必然看到这则通知，且不会
+        // 重复收到同一条；timestampMs 供消费方判快照新鲜度。
+        val notice = lastDialog
+        if (notice != null) lastDialog = null
+        snap.copy(timestampMs = System.currentTimeMillis(), dialogNotice = notice)
+        }
     }
 
     private suspend fun evaluateSnapshotJs(wv: WebView, strategy: DomParser.SnapshotStrategy): String =
-        kotlinx.coroutines.withTimeout(8000) {
-            suspendCancellableCoroutine { cont ->
-                wv.evaluateJavascript(BrowserScript.snapshotJs(strategy)) { result ->
-                    cont.resume(result ?: "[]")
+        try {
+            kotlinx.coroutines.withTimeout(8000) {
+                suspendCancellableCoroutine { cont ->
+                    wv.evaluateJavascript(BrowserScript.snapshotJs(strategy)) { result ->
+                        cont.resume(result ?: "[]")
+                    }
                 }
             }
+        } catch (e: TimeoutCancellationException) {
+            // v1.3.0 超时可重试修复：withTimeout 抛的 TimeoutCancellationException 属取消
+            // 异常族，不转译会被 withRetry 归入「不可重试」直接上抛——而本函数 KDoc
+            // 一直承诺「快照超时视为可重试（熔断保护）」。转成 j.u.c.TimeoutException
+            // （在 RetryPolicy.retryableExceptions 集合内）兑现承诺。
+            // 防误伤：外层协程已被取消/外层 withTimeout 已触发时，这不是本块超时，
+            // 必须原样上抛（转译会破坏外层取消语义）。
+            if (!currentCoroutineContext().isActive) throw e
+            throw java.util.concurrent.TimeoutException("快照求值超时（8000ms 内 WebView 未回调，可能主线程卡顿）")
         }
 
     private suspend fun evaluateA11yJs(wv: WebView): String = kotlinx.coroutines.withTimeout(8000) {
@@ -777,7 +944,8 @@ class BrowserEngine private constructor(
      * 3. **模糊自愈**：ref 失配时用快照缓存的 tag+文本模糊重定位（重打原 ref），
      *    SPA 局部刷新不再直接失败。
      */
-    suspend fun clickElement(ref: String): PostActionState = withContext(Dispatchers.Main) {
+    suspend fun clickElement(ref: String): PostActionState = tracedAction("browser_click", "ref=$ref") {
+        withContext(Dispatchers.Main) {
         val wv = activeTab()?.webView ?: return@withContext PostActionState.failed("无激活标签页")
         // P1 #7：重试+熔断；元素找不到视为可重试瞬态（可能页面未渲染完）
         withRetry(retryPolicy, breaker) {
@@ -798,6 +966,7 @@ class BrowserEngine private constructor(
             down.recycle(); up.recycle()
             delay((300L..800L).random()) // 等待页面响应
             probePage(wv, before)
+        }
         }
     }
 
@@ -895,7 +1064,8 @@ class BrowserEngine private constructor(
         text: String,
         append: Boolean = false,
         pressEnter: Boolean = false,
-    ): PostActionState = withContext(Dispatchers.Main) {
+    ): PostActionState = tracedAction("browser_input", "ref=$ref text=${text.take(40)} append=$append enter=$pressEnter") {
+        withContext(Dispatchers.Main) {
         val wv = activeTab()?.webView ?: return@withContext PostActionState.failed("无激活标签页")
         withRetry(retryPolicy, breaker) {
             val before = readQuickProbe(wv)
@@ -920,10 +1090,13 @@ class BrowserEngine private constructor(
                             throw ElementNotFoundException("输入失败：重定位后仍无法写入 ref=$ref")
                         }
                     } else {
-                        throw ElementNotFoundException("ref=$ref 不是可输入元素（reason=$reason）")
+                        // v1.3.0：参数与页面现实不匹配，重试永远无效——永久性语义错误，
+                        // 不烧退避、不计熔断
+                        throw PermanentActionException("ref=$ref 不是可输入元素（reason=$reason）")
                     }
                 }
-                else -> throw ElementNotFoundException("输入结果解析失败 ref=$ref")
+                // v1.3.0：回传非预期形态无法自愈（脚本被改形/中断），同样永久失败
+                else -> throw PermanentActionException("输入结果解析失败 ref=$ref（页面侧回传非预期形态）")
             }
             if (pressEnter) {
                 evaluateBoolean(wv, BrowserScript.pressKeyJs("enter"))
@@ -933,11 +1106,19 @@ class BrowserEngine private constructor(
             }
             probePage(wv, before)
         }
+        }
     }
 
-    /** <select> 选择：按 value 或可见文本（v1.1.0：模糊自愈 + 前后 diff） */
+    /**
+     * <select> 选择：按 value 或可见文本（v1.1.0：模糊自愈 + 前后 diff）。
+     *
+     * v1.3.0 错误语义拆分：元素在而选项不匹配 = [PermanentActionException]
+     * （重试同一 value 永远失败，且会烧退避 + 误开熔断）；元素不在 =
+     * [ElementNotFoundException]（页面可能未渲染完，保持可重试）。
+     */
     suspend fun selectOption(ref: String, value: String, byText: Boolean = false): PostActionState =
-        withContext(Dispatchers.Main) {
+        tracedAction("browser_select", "ref=$ref value=$value byText=$byText") {
+            withContext(Dispatchers.Main) {
             val wv = activeTab()?.webView ?: return@withContext PostActionState.failed("无激活标签页")
             withRetry(retryPolicy, breaker) {
                 val before = readQuickProbe(wv)
@@ -946,7 +1127,15 @@ class BrowserEngine private constructor(
                     ok = evaluateBoolean(wv, BrowserScript.selectJs(ref, value, byText))
                 }
                 delay(200)
-                if (ok) probePage(wv, before) else throw ElementNotFoundException("找不到 select ref=$ref 或选项不匹配（value=$value byText=$byText）")
+                if (ok) {
+                    probePage(wv, before)
+                } else if (queryCssRect(wv, ref) != null) {
+                    // 元素在 DOM 里，selectJs 却未命中选项 → 选项不匹配（永久错误）
+                    throw PermanentActionException("select 选项不匹配：ref=$ref 无 value=$value（byText=$byText）对应的选项")
+                } else {
+                    throw ElementNotFoundException("找不到 select ref=$ref（可先 snapshot 刷新索引后重试）")
+                }
+            }
             }
         }
 
@@ -974,7 +1163,8 @@ class BrowserEngine private constructor(
         waitForNewContent: Boolean = false,
         maxWaitMs: Long = 3000,
         onProgress: ((percent: Int, phase: String) -> Unit)? = null,
-    ): ScrollResult = withContext(Dispatchers.Main) {
+    ): ScrollResult = tracedAction("browser_scroll", "deltaY=$deltaY waitNew=$waitForNewContent") {
+        withContext(Dispatchers.Main) {
         val wv = activeTab()?.webView ?: return@withContext ScrollResult(scrolled = false)
         onProgress?.invoke(10, "已滚动 ${if (deltaY >= 0) "+" else ""}$deltaY px${if (waitForNewContent) "，等待新内容…" else ""}")
         val before = probePage(wv).newElementsCount
@@ -996,6 +1186,7 @@ class BrowserEngine private constructor(
         } else {
             onProgress?.invoke(100, "滚动完成")
             ScrollResult(scrolled = true)
+        }
         }
     }
 
@@ -1135,6 +1326,10 @@ class BrowserEngine private constructor(
      * 按文本模糊查找元素（v1.1.0 Agent 侧 API）：返回匹配元素的
      * ref/tag/text 矩形列表。Agent 在 ref 失配且快照刷新也无效时，
      * 可用它主动按可见文本重新锚定（与引擎内建的模糊自愈同源）。
+     *
+     * v1.3.0（B2 安全债清偿）：内联 JS 迁移到 [BrowserScript.locateJs] ——
+     * 旧内联版手写转义只覆盖引号，换行 / U+2028 / 控制字符全部裸拼，
+     * 多行搜索词直接撕裂整段脚本；现与全库统一走 JsLiteral.string。
      */
     suspend fun locateElements(
         textContains: String,
@@ -1143,31 +1338,8 @@ class BrowserEngine private constructor(
     ): List<Map<String, String>> = withContext(Dispatchers.Main) {
         val wv = activeTab()?.webView ?: return@withContext emptyList()
         runCatching {
-            val raw = executeJavaScript(
-                """
-                (function(){
-                  var want = ${'"'}${textContains.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"").replace("\n", "\\n")}${'"'};
-                  var nodes = document.querySelectorAll(${'"'}${tag.replace("\"", "\\\"")}${'"'});
-                  var out = [];
-                  for (var i=0;i<nodes.length && out.length<$limit;i++){
-                    var el = nodes[i];
-                    var t = (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g,' ').trim();
-                    if (!t || t.indexOf(want) < 0) continue;
-                    var r = el.getBoundingClientRect();
-                    if (r.width === 0 || r.height === 0) continue;
-                    var ref = el.getAttribute('data-apex-hash');
-                    if (!ref) {
-                      var h = 0; var s = (el.tagName + '|' + t.slice(0,80));
-                      for (var j=0;j<s.length;j++){ h = ((h<<5)-h)+s.charCodeAt(j); h|=0; }
-                      ref = 'r_' + Math.abs(h).toString(36);
-                      el.setAttribute('data-apex-hash', ref);
-                    }
-                    out.push({ ref: ref, tag: el.tagName, text: t.slice(0,120) });
-                  }
-                  return JSON.stringify(out);
-                })();
-                """.trimIndent()
-            ) ?: return@withContext emptyList()
+            val raw = executeJavaScript(BrowserScript.locateJs(textContains, tag, limit))
+                ?: return@withContext emptyList()
             val inner = json.parseToJsonElement(raw).jsonPrimitive.content
             json.parseToJsonElement(inner).jsonArray.map { el ->
                 val obj = el.jsonObject
@@ -1363,19 +1535,11 @@ class BrowserEngine private constructor(
         /** 导航次数阈值：超过后下次 navigate 前重建 WebView（P2 #15） */
         private const val MAX_NAVIGATIONS_BEFORE_REBUILD = 50
 
-        /**
-         * 反检测隐身 JS（#13 轻量版）：隐藏自动化痕迹，降低被反爬识别概率。
-         * 注意：仅做基础痕迹抹除，不过度伪装（避免破坏页面功能）。
-         */
-        private val STEALTH_JS = """
-            (function(){
-                try {
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                } catch(e) {}
-                try {
-                    Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
-                } catch(e) {}
-            })();
-        """.trimIndent()
+        /** [waitForCondition] 支持的等待模式（v1.3.0 扩到 7 种，见其 KDoc） */
+        private val WAIT_MODES = setOf("selector", "text", "url", "element_gone", "text_gone", "network_idle", "selector_count")
+
+        // 反检测隐身 JS（#13 轻量版）已于 v1.3.0 下沉到
+        // [com.apex.browser.core.BrowserScript.STEALTH_JS]（JS 工厂只放 BrowserScript.kt
+        // 的收敛口径），onPageFinished 与 NETWORK_MONITOR_JS 合并注入。
     }
 }

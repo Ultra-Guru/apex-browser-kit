@@ -25,6 +25,7 @@ class BrowserChromeController(
     private val gateway: BrowserEngineGateway,
     private val scripts: UserscriptRegistry? = null,
     val config: ChromeConfig = ChromeConfig(),
+    private val strings: ChromeStrings = ChromeStrings.DEFAULT,
 ) {
 
     /** 编辑会话内部形态。 */
@@ -137,6 +138,7 @@ class BrowserChromeController(
                 includeClipboard = text.isBlank(),
                 max = config.maxSuggestions,
                 activeTabId = _ui.value.activeTabId,
+                strings = strings,
             ),
         )
     }
@@ -154,6 +156,7 @@ class BrowserChromeController(
                 includeClipboard = t.isBlank() && !cur.clipboardShown,
                 max = config.maxSuggestions,
                 activeTabId = _ui.value.activeTabId,
+                strings = strings,
             ),
         )
     }
@@ -211,8 +214,8 @@ class BrowserChromeController(
         }
         if (job != null) closeJobs[tabId] = job
         showSnack(
-            message = "已关闭标签",
-            actionLabel = "撤销",
+            message = strings.snackTabClosed,
+            actionLabel = strings.snackUndo,
             onAction = { undoClose(tabId) },
         )
     }
@@ -225,7 +228,7 @@ class BrowserChromeController(
     fun closeOthers() {
         val active = _ui.value.activeTabId
         _ui.value.tabs.filter { it.id != active }.forEach { gateway.closeTab(it.id) }
-        showSnack("已关闭其他标签")
+        showSnack(strings.snackOthersClosed)
     }
 
     fun closeAll() {
@@ -233,7 +236,7 @@ class BrowserChromeController(
         closeJobs.clear()
         closingIds.value = emptySet()
         gateway.closeAllTabs()
-        showSnack("已关闭全部标签")
+        showSnack(strings.snackAllClosed)
     }
 
     /* ---------------- 页内查找 ---------------- */
@@ -285,7 +288,7 @@ class BrowserChromeController(
     fun toggleDesktopMode() {
         val next = !_ui.value.desktopMode
         gateway.setDesktopMode(next)
-        showSnack(if (next) "已切换桌面版网站" else "已切换回移动版")
+        showSnack(if (next) strings.snackDesktopModeOn else strings.snackDesktopModeOff)
     }
 
     fun openExternal() {

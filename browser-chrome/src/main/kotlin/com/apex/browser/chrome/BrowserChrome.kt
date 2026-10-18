@@ -61,6 +61,15 @@ fun BrowserChrome(
     handoffBanner: (@Composable () -> Unit)? = null,
     /** chrome 头部实际高度变化回调（宿主用它给 WebView 容器留白，防止遮挡）。 */
     onChromeHeightChanged: ((Int) -> Unit)? = null,
+    /**
+     * 页面区透明（v1.5.0 P1 修复）：宿主把真实 WebView 放在本组合树之外
+     *（同一窗口内的兄弟 View 层，如 BrowserOverlay / InAppChromeHost 容器）
+     * 时传 true —— 根 Column 不再刷不透明底色，页面区透出真实 WebView。
+     * 旧实现根 Column 恒刷不透明 palette.background，把背后的 WebView 整个
+     * 盖住：接管浮窗「有 chrome 无页面」，只剩一块纯色页区。默认 false
+     *（页区由本组合树内的 pageSlot 自绘时保持旧视觉）。
+     */
+    transparentPageArea: Boolean = false,
     pageSlot: @Composable () -> Unit,
 ) {
     val ui by controller.ui.collectAsStateWithLifecycle()
@@ -76,12 +85,17 @@ fun BrowserChrome(
     }
 
     // 系统返回键：编辑态 → 查找栏 → 浮层，逐级让位；都关着则交还宿主。
-    // 浮窗 ComposeView 没挂 OnBackPressedDispatcherOwner（Activity 才有）时
-    // 直接不注册，避免任何窗口层级差异下的运行时异常。
-    val hasBackDispatcher = LocalOnBackPressedDispatcherOwner.current != null
-    val backConsumable = (ui.address is AddressBarUi.Editing ||
-        ui.findBarVisible || ui.sheet != null) && hasBackDispatcher
-    BackHandler(enabled = backConsumable) { controller.handleBack() }
+    // P0 修复（#375 / crash-1792191618578）：activity-compose 的 BackHandler 在
+    // enabled=false 时也会先 checkNotNull(LocalOnBackPressedDispatcherOwner)——
+    // 浮窗 ComposeView 挂在 WindowManager（无 Activity 返回栈），该 Local 为
+    // null → 组合即抛 IllegalStateException 杀主线程（旧实现的
+    // hasBackDispatcher 短路防不住这层 checkNotNull）。修复：无 dispatcher 时
+    // 整个 BackHandler 不进入组合树（条件组合，而非 enabled=false 短路）。
+    if (LocalOnBackPressedDispatcherOwner.current != null) {
+        val backConsumable = ui.address is AddressBarUi.Editing ||
+            ui.findBarVisible || ui.sheet != null
+        BackHandler(enabled = backConsumable) { controller.handleBack() }
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(controller) {
@@ -108,7 +122,17 @@ fun BrowserChrome(
 
     CompositionLocalProvider(LocalChromePalette provides palette) {
         MaterialTheme(colorScheme = colorScheme) {
-            Column(modifier = modifier.fillMaxSize().background(palette.background)) {
+            // 根 Column 底色（P1 修复）：ChromeBar / TabStrip 自带不透明底，根底色
+            // 只对页面区生效 —— transparentPageArea=true（真实 WebView 在组合树外）
+            // 时不刷，透出页面；否则保持旧视觉（pageSlot 自绘场景）。
+            Column(
+                modifier = modifier
+                    .fillMaxSize()
+                    .then(
+                        if (transparentPageArea) Modifier
+                        else Modifier.background(palette.background)
+                    )
+            ) {
 
                 // chrome 头部（地址栏 + 可选接管横幅 + 标签条）：宿主据实际高度给 WebView 留白
                 Column(

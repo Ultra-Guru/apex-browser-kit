@@ -76,6 +76,9 @@ object UrlUtils {
  *
  * 排序规则：剪贴板（仅空输入且未消费）→ URL 直达 → 已打开标签 → 历史 → 搜索兜底。
  * 全程去重并封顶 max。
+ *
+ * 副标题文案经 [strings] 注入（v1.2.0：逻辑层 stringResource 不可达，
+ * 默认 ZhChromeStrings 与旧硬编码逐字一致）。
  */
 object SuggestionsBuilder {
 
@@ -87,6 +90,7 @@ object SuggestionsBuilder {
         includeClipboard: Boolean,
         max: Int = 8,
         activeTabId: String? = null,
+        strings: ChromeStrings = ChromeStrings.DEFAULT,
     ): List<Suggestion> {
         val t = text.trim()
         val out = mutableListOf<Suggestion>()
@@ -102,7 +106,7 @@ object SuggestionsBuilder {
                     Suggestion(
                         kind = SuggestionKind.CLIPBOARD,
                         primary = clipboardUrl.orEmpty(),
-                        secondary = "剪贴板 · 粘贴即走",
+                        secondary = strings.suggestionClipboardHint,
                         actionUrl = clipboardUrl,
                     ),
                     "clip",
@@ -139,7 +143,7 @@ object SuggestionsBuilder {
                 Suggestion(
                     kind = SuggestionKind.URL,
                     primary = t,
-                    secondary = "网址",
+                    secondary = strings.suggestionUrlLabel,
                     actionUrl = t,
                 ),
                 "url",
@@ -153,7 +157,7 @@ object SuggestionsBuilder {
                 Suggestion(
                     kind = SuggestionKind.OPEN_TAB,
                     primary = tab.title.ifBlank { tab.host },
-                    secondary = "切换 · ${tab.host}",
+                    secondary = strings.tabSwitchHint(tab.host),
                     tabId = tab.id,
                 ),
                 "tab:${tab.id}",
@@ -178,7 +182,7 @@ object SuggestionsBuilder {
             Suggestion(
                 kind = SuggestionKind.SEARCH,
                 primary = t,
-                secondary = "搜索",
+                secondary = strings.suggestionSearchLabel,
             ),
             "search",
         )

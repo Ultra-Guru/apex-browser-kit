@@ -58,6 +58,12 @@ object BrowserScript {
           }
           var MAX = $SNAPSHOT_MAX_ELEMENTS;
           var out = [];
+          // v1.3.0 同键去重：同一 semanticKey（列表页里大量「角色+文案+位置」完全相同的
+          // 元素，如未滚动时同一批商品卡）会算出同一个 hash，data-apex-hash 撞键后
+          // ref 定位永远命中第一个 —— 其余同名元素永远不可操作。第 2+ 次出现时
+          // 追加 '#n' 后缀（hash + '#' + n），保证每个可操作元素拥有唯一主键；
+          // refLookupJs 用属性全等比较，天然兼容带后缀的 ref。
+          var seen = {};
           var interactiveSel = ${JsLiteral.string(sel)};
           var all = document.querySelectorAll(interactiveSel);
           // 匹配总数先记下来：触顶截断时必须让模型知道「页面里还有更多」，
@@ -82,6 +88,9 @@ object BrowserScript {
             var role = el.getAttribute('role') || el.tagName.toLowerCase();
             var semanticKey = role + '|' + text + '|' + el.tagName + '|' + Math.round(rect.top + window.scrollY);
             var ref = hash(semanticKey);
+            var n = seen[semanticKey] || 0;
+            seen[semanticKey] = n + 1;
+            if (n > 0) ref = ref + '#' + (n + 1);
             el.setAttribute('data-apex-hash', ref);
             var attrs = { 'data-apex-hash': ref };
             var keep = ['href','name','type','placeholder','value','aria-label','title','role','alt','id'];
@@ -125,8 +134,15 @@ object BrowserScript {
           var out = [];
           // 有 accessible name 的节点：role / aria-label / 文本 任一即可
           var all = document.querySelectorAll('*');
-          var total = all.length;
-          for (var i=0;i<all.length && out.length<MAX;i++){
+          // v1.3.0 total 口径修正：旧实现 total = all.length（把全部纯布局 div、
+          // script/head 节点也计入，动辄上千），truncated 恒为真 —— 模型被误导
+          // 「页面还有大量可操作元素没抓到」。现改为循环内计数器：只数
+          // 「有 name/role 的语义节点」，截断播报才如实。
+          var total = 0;
+          // v1.3.0 同键去重（与 snapshotJs 同逻辑）：同一 semanticKey 撞键后
+          // ref 定位永远命中第一个，其余同名元素不可操作；第 2+ 次追加 '#n'。
+          var seen = {};
+          for (var i=0;i<all.length;i++){
             var el = all[i];
             var role = el.getAttribute && el.getAttribute('role');
             // innerText 在部分元素上 undefined（SVG/void 元素），textContent 为通用回退；
@@ -138,11 +154,17 @@ object BrowserScript {
             if (!role && (!name || name.length===0)) continue;
             // 跳过纯布局容器（无语义 role 且无标签）
             if (!role && el.children.length>0 && inner.replace(/\s+/g,' ').trim().length>120) continue;
+            total++;
+            // 已满只计数不收集（保持截断诚实性，不再提前退出循环）
+            if (out.length >= MAX) continue;
             var rect = el.getBoundingClientRect();
             if (rect.width===0 || rect.height===0) continue;
             var text = (name||'').toString().slice(0,120);
             var semanticKey = (role||el.tagName) + '|' + text + '|' + el.tagName;
             var ref = hash(semanticKey);
+            var n = seen[semanticKey] || 0;
+            seen[semanticKey] = n + 1;
+            if (n > 0) ref = ref + '#' + (n + 1);
             el.setAttribute('data-apex-hash', ref);
             var depth = 0, p = el;
             while ((p = p.parentElement) && depth < 20) { depth++; }
@@ -167,28 +189,38 @@ object BrowserScript {
     /**
      * 网络监控（#18）：拦截 fetch / XMLHttpRequest，记录 API 请求到 window.__apexNetLog，
      * 供 [browser_network_log] 工具读取。注入一次即可持续生效。
+     *
+     * v1.3.0 增强：同步维护 `window.__apexNetPending` 在途计数（fetch/xhr 发起 +1，
+     * settle -1），配合 [networkIdleJs] 供 Kotlin 侧轮询「网络空闲」——
+     * waitForCondition(network_idle) 的数据源。导航会重置 JS 上下文，
+     * 本脚本需在每次 onPageFinished 重注入（引擎侧已接线）。
      */
     val NETWORK_MONITOR_JS: String
         get() = """
         (function(){
           if (window.__apexNetHooked) return;
           window.__apexNetLog = window.__apexNetLog || [];
+          window.__apexNetPending = window.__apexNetPending || 0;
           window.__apexNetHooked = true;
           function rec(method, url, status){
             window.__apexNetLog.push({ method: method, url: (url||'').toString().slice(0,200), status: status||0, t: Date.now() });
             if (window.__apexNetLog.length > 200) window.__apexNetLog.shift();
           }
+          function begin(){ window.__apexNetPending++; }
+          function settle(){ window.__apexNetPending = Math.max(0, window.__apexNetPending - 1); }
           var origFetch = window.fetch;
           if (origFetch) window.fetch = function(){
             var args = arguments; var u = args[0];
-            return origFetch.apply(this, args).then(function(r){ rec('fetch', u, r.status); return r; }, function(e){ rec('fetch', u, 0); throw e; });
+            begin();
+            return origFetch.apply(this, args).then(function(r){ settle(); rec('fetch', u, r.status); return r; }, function(e){ settle(); rec('fetch', u, 0); throw e; });
           };
           var origXhr = window.XMLHttpRequest.prototype.open;
           window.XMLHttpRequest.prototype.open = function(m,u){ this.__apexMethod=m; this.__apexUrl=u; return origXhr.apply(this, arguments); };
           var origSend = window.XMLHttpRequest.prototype.send;
           window.XMLHttpRequest.prototype.send = function(){
             var self=this; var mu=this.__apexMethod, ul=this.__apexUrl;
-            this.addEventListener('loadend', function(){ rec(mu, ul, self.status); });
+            begin();
+            this.addEventListener('loadend', function(){ settle(); rec(mu, ul, self.status); });
             return origSend.apply(this, arguments);
           };
         })();
@@ -628,6 +660,91 @@ object BrowserScript {
     /** 当前 URL 读取（v1.1.0 waitForUrl 轮询用）。 */
     val CURRENT_URL_JS: String
         get() = "(function(){ return location.href; })();"
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  v1.3.0 深度增强脚本（等待谓词 / 模糊定位收敛 / 网络空闲）
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * 反检测隐身 JS（#13 轻量版）：隐藏自动化痕迹，降低被反爬识别概率。
+     * 注意：仅做基础痕迹抹除，不过度伪装（避免破坏页面功能）。
+     *
+     * v1.3.0 自引擎伴生对象下沉到此（「JS 工厂只放 BrowserScript.kt」的收敛口径），
+     * 引擎侧 onPageFinished 与 [NETWORK_MONITOR_JS] 合并注入。
+     */
+    val STEALTH_JS: String
+        get() = """
+        (function(){
+            try {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            } catch(e) {}
+            try {
+                Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
+            } catch(e) {}
+        })();
+        """.trimIndent()
+
+    /**
+     * 按文本模糊查找元素（v1.3.0）：迁移自 BrowserEngine.locateElements 的内联 JS
+     * —— 该处手写了一套只覆盖 `'` 与 `"` 的私有转义（B2 安全债），且换行/U+2028
+     * 全部裸拼。现收敛到本工厂，[textContains] 与 [tag] 一律经 [JsLiteral.string]。
+     *
+     * 模糊匹配与 hash 逻辑同 [locateByFuzzyJs] 统一（含 role）：
+     * - 文本取值链 `innerText → value → aria-label → placeholder`；
+     * - 无 data-apex-hash 的命中元素现场计算语义哈希（role + text + tag）并**打上
+     *   data-apex-hash**，使返回的 ref 可直接用于后续 click/input；
+     * - 零尺寸元素跳过（不可见即不可操作）。
+     *
+     * @param textContains 目标文本子串（Agent 自由文本，经 JsLiteral 编码）
+     * @param tag 限定标签/选择器（如 "button"、"a"、"input[name=q]"）
+     * @param limit 返回条数上限（收敛到 1..50）
+     */
+    fun locateJs(textContains: String, tag: String, limit: Int): String =
+        """
+        (function(){
+          var want = ${JsLiteral.string(textContains)};
+          var nodes = document.querySelectorAll(${JsLiteral.string(tag)});
+          var out = [];
+          for (var i=0;i<nodes.length && out.length<${limit.coerceIn(1, 50)};i++){
+            var el = nodes[i];
+            var t = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').replace(/\s+/g,' ').trim();
+            if (!t || t.indexOf(want) < 0) continue;
+            var r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            var ref = el.getAttribute('data-apex-hash');
+            if (!ref) {
+              var role = el.getAttribute('role') || el.tagName.toLowerCase();
+              var h = 0; var s = role + '|' + t.slice(0,80) + '|' + el.tagName;
+              for (var j=0;j<s.length;j++){ h = ((h<<5)-h)+s.charCodeAt(j); h|=0; }
+              ref = 'r_' + Math.abs(h).toString(36);
+              el.setAttribute('data-apex-hash', ref);
+            }
+            out.push({ ref: ref, tag: el.tagName, text: t.slice(0,120) });
+          }
+          return JSON.stringify(out);
+        })();
+        """.trimIndent()
+
+    /**
+     * CSS 选择器命中计数（v1.3.0）：`document.querySelectorAll(...).length`，
+     * 同步返回数值 —— waitForCondition(selector_count) 的取值侧。
+     * 选择器经 [JsLiteral.string] 编码；广义选择器抛错时兜底 0。
+     */
+    fun selectorCountJs(selector: String): String =
+        """
+        (function(){ try { return document.querySelectorAll(${JsLiteral.string(selector)}).length; }
+        catch(e){ return 0; } })();
+        """.trimIndent()
+
+    /**
+     * 网络在途请求数（v1.3.0）：同步返回 `window.__apexNetPending || 0`。
+     *
+     * 数据源是 [NETWORK_MONITOR_JS] 维护的计数（fetch/xhr 发起 +1、settle -1）；
+     * 监控未注入/被导航重置时返回 0。**无 Promise**（evaluateJavascript 不等待
+     * Promise），真正的「连续 2 次为 0 才算 idle」由 Kotlin 侧轮询判定。
+     */
+    fun networkIdleJs(): String =
+        "(function(){ return window.__apexNetPending || 0; })();"
 
     /** 内容抽取模式。 */
     enum class ExtractMode(val value: String) {

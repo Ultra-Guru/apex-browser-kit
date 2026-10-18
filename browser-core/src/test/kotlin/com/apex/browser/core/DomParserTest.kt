@@ -1,5 +1,6 @@
 package com.apex.browser.core
 
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -318,5 +319,42 @@ class DomParserTest {
         // 空 BUTTON 被剔除，保留标题/段落/链接
         assertEquals(3, snap.interactiveCount)
         assertTrue(snap.interactiveElements.none { it.tag == "button" })
+    }
+
+    // ═══ v1.3.0：PageSnapshot 新增尾参（timestampMs / dialogNotice）契约 ═══
+
+    @Test
+    fun `timestampMs 与 dialogNotice 为带默认值尾参且 parse 侧默认为零值`() {
+        // 意图：两个新字段是「带默认值的尾参」——DomParser.parse 既有构造点零改动，
+        // 默认 0 / null 保持旧消费方行为不变（引擎侧负责填充）。
+        val snap = DomParser.parse(rawJson(listOf(el("A", "链接", hashed("r_1")))), "u", "t", 0, 100, 100)
+        assertEquals(0, snap.timestampMs)
+        assertEquals(null, snap.dialogNotice)
+    }
+
+    @Test
+    fun `timestampMs 与 dialogNotice 经 copy 透传不丢`() {
+        // 意图：引擎在 snapshot() 出口用 .copy(timestampMs=..., dialogNotice=...) 融合
+        // 两个字段 —— data class copy 必须无损透传全部既有字段，否则融合即丢失。
+        val snap = DomParser.parse(rawJson(listOf(el("A", "链接", hashed("r_1")))), "u", "t", 0, 100, 100)
+        val fused = snap.copy(timestampMs = 1760000000000L, dialogNotice = "confirm: 确认提交？")
+        assertEquals(1760000000000L, fused.timestampMs)
+        assertEquals("confirm: 确认提交？", fused.dialogNotice)
+        // 既有字段不受融合影响
+        assertEquals("u", fused.url)
+        assertEquals(1, fused.interactiveCount)
+        assertEquals("r_1", fused.interactiveElements[0].ref)
+    }
+
+    @Test
+    fun `timestampMs 与 dialogNotice 序列化往返保持`() {
+        // 意图：PageSnapshot 是 @Serializable（宿主可能落盘/跨进程传快照），
+        // 新字段必须随序列化往返保留；旧 JSON（无新字段）反序列化回落默认值。
+        val snap = DomParser.parse(rawJson(listOf(el("A", "链接", hashed("r_1")))), "u", "t", 0, 100, 100)
+            .copy(timestampMs = 42L, dialogNotice = "alert: hello")
+        val encoded = Json.encodeToString(snap)
+        val decoded = Json.decodeFromString<PageSnapshot>(encoded)
+        assertEquals(42L, decoded.timestampMs)
+        assertEquals("alert: hello", decoded.dialogNotice)
     }
 }

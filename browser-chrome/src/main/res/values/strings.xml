@@ -101,4 +101,11 @@
     <!-- 轻提示（BrowserChrome） -->
     <string name="browser_snack_link_copied">链接已复制</string>
     <string name="browser_snack_no_link">当前无页面链接</string>
+
+
+    <!-- 实时页面悬浮窗（LiveViewOverlay · v1.4.0） -->
+    <string name="browser_live_take_over">接管</string>
+    <string name="browser_live_take_over_cd">进入人工接管：展开全屏浏览器窗口</string>
+    <string name="browser_live_close_cd">收起实时页面悬浮窗</string>
+    <string name="browser_live_url_empty">实时页面 · 等待 Agent 开始浏览</string>
 </resources>

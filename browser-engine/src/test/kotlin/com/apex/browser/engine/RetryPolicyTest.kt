@@ -3,6 +3,7 @@ package com.apex.browser.engine
 import com.apex.browser.core.CircuitBreaker
 import com.apex.browser.core.ElementNotFoundException
 import com.apex.browser.core.CircuitOpenException
+import com.apex.browser.core.PermanentActionException
 import com.apex.browser.core.RetryPolicy
 import com.apex.browser.core.withRetry
 import kotlinx.coroutines.delay
@@ -90,5 +91,84 @@ class RetryPolicyTest {
             withRetry(policy, breaker2) { "ok" }
         }
         assertEquals(CircuitBreaker.State.CLOSED, breaker2.currentState)
+    }
+
+    // ═══ v1.3.0：永久性语义错误 + 熔断并发修复 + 超时可重试 ═══
+
+    @Test
+    fun `永久性语义错误不重试不计熔断`() = runBlocking {
+        val breaker = CircuitBreaker(failureThreshold = 2, resetTimeoutMs = 1000)
+        val policy = RetryPolicy(maxRetries = 3)
+        var attempts = 0
+        val thrown = runCatching {
+            withRetry(policy, breaker) {
+                attempts++
+                throw PermanentActionException("ref=r_x 不是可输入元素")
+            }
+        }.exceptionOrNull()
+        assertTrue("预期 PermanentActionException，实际 ${thrown?.javaClass}", thrown is PermanentActionException)
+        assertEquals("永久性错误必须立即上抛（重试永远无效）", 1, attempts)
+        assertEquals("永久性错误不得计入熔断", CircuitBreaker.State.CLOSED, breaker.currentState)
+    }
+
+    @Test
+    fun `超时异常属于可重试集合并按退避重试`() = runBlocking {
+        // evaluateSnapshotJs 的 TimeoutCancellationException 转译承接方：
+        // juc TimeoutException 必须在默认可重试集合内，否则转译了也不重试。
+        val policy = RetryPolicy()
+        assertTrue(
+            "java.util.concurrent.TimeoutException 必须在默认可重试集合内",
+            policy.retryableExceptions.contains(java.util.concurrent.TimeoutException::class.java),
+        )
+        val breaker = CircuitBreaker(failureThreshold = 5, resetTimeoutMs = 1000)
+        val fast = RetryPolicy(maxRetries = 2, initialDelayMs = 1, maxDelayMs = 2)
+        var attempts = 0
+        val thrown = runCatching {
+            withRetry(fast, breaker) {
+                attempts++
+                throw java.util.concurrent.TimeoutException("snapshot eval timeout")
+            }
+        }.exceptionOrNull()
+        assertTrue(thrown is java.util.concurrent.TimeoutException)
+        assertEquals("maxRetries=2 → 1 次初始 + 2 次重试 = 3 次", 3, attempts)
+    }
+
+    @Test
+    fun `并发 onFailure 计数不丢失`() {
+        // v1.3.0 @Synchronized 回归锁：8 线程 × 50 次失败 = 400 恰好达阈值。
+        // 旧实现 consecutiveFailures++ 非原子，交错自增丢计数 → 状态停在 CLOSED。
+        val breaker = CircuitBreaker(failureThreshold = 400, resetTimeoutMs = 60_000)
+        val threads = (1..8).map {
+            Thread { repeat(50) { breaker.onFailure() } }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        assertEquals(
+            "全部 400 次失败必须被计数（恰触阈值 → OPEN）；CLOSED 即同步回归",
+            CircuitBreaker.State.OPEN,
+            breaker.currentState,
+        )
+    }
+
+    @Test
+    fun `熔断窗口内并发 acquire 一致拒绝且窗口后放行恢复`() = runBlocking {
+        val breaker = CircuitBreaker(failureThreshold = 1, resetTimeoutMs = 400)
+        breaker.onFailure()
+        assertEquals(CircuitBreaker.State.OPEN, breaker.currentState)
+        val rejected = java.util.concurrent.atomic.AtomicInteger(0)
+        val threads = (1..8).map {
+            Thread {
+                runCatching { breaker.acquire() }
+                    .onFailure { rejected.incrementAndGet() }
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        assertEquals("窗口内并发 acquire 必须全部被拒（无放行漏网）", 8, rejected.get())
+        // 越过重置窗口：OPEN → HALF_OPEN 放行试探，成功后回 CLOSED
+        delay(500)
+        breaker.acquire()
+        breaker.onSuccess()
+        assertEquals(CircuitBreaker.State.CLOSED, breaker.currentState)
     }
 }

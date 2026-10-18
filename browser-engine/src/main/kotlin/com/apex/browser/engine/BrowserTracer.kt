@@ -4,6 +4,10 @@ import java.time.Instant
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentLinkedDeque
 import kotlin.math.min
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 /**
  * 浏览器操作可观测性记录器（P1 #9）。
@@ -12,6 +16,13 @@ import kotlin.math.min
  * 本记录器在内存中维护一个固定容量的环形缓冲（默认 100 条），记录每次工具调用的
  * 输入/输出/耗时/WebView 状态。Agent 可用 [browser_debug_dump] 导出最近 N 条，
  * 用 [browser_context_summary] 生成压缩的进度摘要（P1 #8 轻量版）。
+ *
+ * v1.3.0 增强：
+ * - [Entry.error] / [record] 的 `error` 尾参：失败边界携带错误摘要（成功为 null），
+ *   导出 trace 时不再需要从 resultSummary 反推成败；
+ * - [events] SharedFlow：record 的同时 tryEmit，宿主/调试面板可实时订阅每次
+ *   动作与系统事件（无需轮询 recent()）。replay=0（只给在线订阅者），
+ *   缓冲 64 条 DROP_OLDEST —— 慢消费者不阻塞记录路径（tryEmit 永不挂起）。
  *
  * 设计取舍：
  * - 仅内存缓冲，不落盘、不接 OpenTelemetry（避免增加包体与后台依赖）。
@@ -27,9 +38,19 @@ class BrowserTracer(private val capacity: Int = 100) {
         val durationMs: Long,
         val url: String?,
         val state: String,
+        /** v1.3.0：失败边界的错误摘要（成功时为 null；与 resultSummary 互不重复） */
+        val error: String? = null,
     )
 
     private val buffer = ConcurrentLinkedDeque<Entry>()
+
+    private val _events = MutableSharedFlow<Entry>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /** v1.3.0：实时事件流（replay=0，订阅先于 record 才能收到；慢消费者丢弃旧值不阻塞记录） */
+    val events: SharedFlow<Entry> = _events.asSharedFlow()
 
     fun record(
         tool: String,
@@ -38,13 +59,16 @@ class BrowserTracer(private val capacity: Int = 100) {
         durationMs: Long,
         url: String?,
         state: String,
+        error: String? = null,
     ) {
-        buffer.addLast(Entry(
+        val entry = Entry(
             timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.now()),
             tool = tool, params = params, resultSummary = resultSummary,
-            durationMs = durationMs, url = url, state = state,
-        ))
+            durationMs = durationMs, url = url, state = state, error = error,
+        )
+        buffer.addLast(entry)
         while (buffer.size > capacity) buffer.removeFirst()
+        _events.tryEmit(entry)
     }
 
     /** 最近 limit 条完整 trace（用于调试导出） */

@@ -553,4 +553,101 @@ class BrowserScriptTest {
             assertFalse("$name 不得把 depth 写死 0", js.contains("depth: 0,"))
         }
     }
+
+    // ═══ v1.3.0：ref 同键去重 / a11y total 口径 / locateJs 收敛 / 等待谓词脚本 ═══
+
+    @Test
+    fun `snapshotJs 对同 semanticKey 的 ref 追加井号序号去重`() {
+        val js = BrowserScript.snapshotJs()
+        // 意图：列表页大量「角色+文案+位置」完全相同的元素（同一批商品卡/同一组
+        // 工具按钮）会算出同一个 hash，data-apex-hash 撞键后 ref 定位永远命中
+        // 第一个——其余同名元素永远不可操作。第 2+ 次出现必须追加 '#n' 保唯一。
+        assertTrue("应有 seen 计数表", js.contains("var seen = {};"))
+        assertTrue("应查表取出现次数", js.contains("seen[semanticKey]"))
+        assertTrue("第 2+ 次出现应追加 #n 后缀", js.contains("'#' + (n + 1)"))
+    }
+
+    @Test
+    fun `A11Y_FALLBACK_JS 同样做同键去重`() {
+        val js = BrowserScript.A11Y_FALLBACK_JS
+        assertTrue("应有 seen 计数表", js.contains("var seen = {};"))
+        assertTrue("第 2+ 次出现应追加 #n 后缀", js.contains("'#' + (n + 1)"))
+    }
+
+    @Test
+    fun `A11Y total 为语义节点计数而非全节点数`() {
+        val js = BrowserScript.A11Y_FALLBACK_JS
+        // 意图：旧口径 total = querySelectorAll('*').length，把纯布局 div/script/head
+        // 全部计入（动辄上千），truncated 恒为真——模型被误导「页面还有大量可操作
+        // 元素没抓到」。必须是「有 name/role 的语义节点」循环内计数。
+        assertFalse("不得以全节点数为 total", js.contains("var total = all.length;"))
+        assertTrue("应为循环内递增计数器", js.contains("total++"))
+        assertTrue("截断标记仍与 out 长度对比", js.contains("truncated: total > out.length"))
+    }
+
+    @Test
+    fun `locateJs 对抗语料 - U2028 行分隔符必须转义`() {
+        // 意图：U+2028 在 JSON 合法但 JS 字符串字面量非法（ES2019 前的著名陷阱），
+        // 裸拼会让整段 evaluateJavascript 直接语法错误。旧引擎内联版完全没有转义。
+        val js = BrowserScript.locateJs("a\u2028b", "*", 10)
+        assertFalse("不得出现裸 U+2028", js.contains("\u2028"))
+        assertTrue("应转义为 \\u2028 字面量", js.contains("\\u2028"))
+    }
+
+    @Test
+    fun `locateJs 对抗语料 - 单引号闭合注入必须转义`() {
+        val js = BrowserScript.locateJs("x']);alert(1);//", "button", 10)
+        assertTrue("单引号必须转义", js.contains("\\'"))
+        assertFalse("不得出现未转义闭合序列", js.contains("'));alert"))
+        assertTrue("定位文本以字面量进入脚本", js.contains("var want = 'x\\']);alert(1);//';"))
+    }
+
+    @Test
+    fun `locateJs tag 参数同样转义且 limit 收敛`() {
+        val js = BrowserScript.locateJs("提交", "input[name='q']", 99)
+        assertTrue("tag 中的引号必须转义", js.contains("input[name=\\'q\\']"))
+        assertTrue("limit 收敛到 50 上限", js.contains("out.length<50"))
+        // 文本取值链与 locateByFuzzyJs 统一（含 placeholder）
+        assertTrue(js.contains("el.getAttribute('placeholder')"))
+    }
+
+    @Test
+    fun `locateJs 命中元素打上可复用的语义哈希 ref`() {
+        val js = BrowserScript.locateJs("提交订单", "button", 10)
+        assertTrue("无 hash 时应现场计算并打标", js.contains("setAttribute('data-apex-hash'"))
+        assertTrue("语义键含 role（与快照口径统一）", js.contains("getAttribute('role') || el.tagName.toLowerCase()"))
+    }
+
+    @Test
+    fun `selectorCountJs 返回 querySelectorAll 计数且转义选择器`() {
+        val js = BrowserScript.selectorCountJs("a[href^='x']")
+        assertTrue(
+            "选择器经 JsLiteral 编码嵌入",
+            js.contains("document.querySelectorAll('a[href^=\\'x\\']').length"),
+        )
+        assertTrue("同步返回数值（无 Promise）", !js.contains("Promise"))
+    }
+
+    @Test
+    fun `networkIdleJs 同步返回在途计数`() {
+        val js = BrowserScript.networkIdleJs()
+        assertTrue(js.contains("window.__apexNetPending || 0"))
+        assertFalse("不得含 Promise（evaluateJavascript 不等待）", js.contains("Promise"))
+    }
+
+    @Test
+    fun `NETWORK_MONITOR_JS 维护在途计数供 networkIdleJs 消费`() {
+        val js = BrowserScript.NETWORK_MONITOR_JS
+        assertTrue("发起请求应 +1", js.contains("window.__apexNetPending++"))
+        assertTrue("settle 应递减且不落负", js.contains("Math.max(0, window.__apexNetPending - 1)"))
+        assertTrue("fetch 与 xhr 链路都挂 begin", js.contains("begin();"))
+    }
+
+    @Test
+    fun `STEALTH_JS 下沉到 BrowserScript 且保持隐身语义`() {
+        val js = BrowserScript.STEALTH_JS
+        assertTrue(js.contains("navigator, 'webdriver'"))
+        assertTrue(js.contains("navigator, 'languages'"))
+        assertFalse("不得含 Promise", js.contains("Promise"))
+    }
 }
