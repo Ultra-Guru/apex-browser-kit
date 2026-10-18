@@ -8,7 +8,10 @@ Three checks, none of which need an Android SDK or a Gradle run:
           unrelated responsibilities, resist review, and are the #1 source of
           merge conflicts. Budgets inherited from Android-Guru-Agent's
           ``scripts/check_file_size.sh`` (main 1200 / test 1600) so the two
-          repos stay consistent.
+          repos stay consistent. v1.3.0: the budget counts **non-comment
+          lines** (the same ``code_lines`` filter as GATE 2/3) — a file that
+          grows only in KDoc is not growing in code, and documentation was
+          never the hazard this gate exists for.
 
   GATE 2  ``printStackTrace()`` in main sources. Unroutable stdout; Android
           code should go through ``android.util.Log``.
@@ -80,21 +83,21 @@ def main() -> int:
         return 1
     failed = False
 
-    # ── GATE 1: file-size budget ────────────────────────────────────────────
+    # ── GATE 1: file-size budget (non-comment lines; KDoc is free) ───────────
     oversized_main: list[tuple[int, Path]] = []
     oversized_test: list[tuple[int, Path]] = []
     for f in main_files:
-        n = len(f.read_text(encoding="utf-8").splitlines())
+        n = len(code_lines(f))
         if n > MAX_MAIN_LINES:
             oversized_main.append((n, f))
     for f in test_files:
-        n = len(f.read_text(encoding="utf-8").splitlines())
+        n = len(code_lines(f))
         if n > MAX_TEST_LINES:
             oversized_test.append((n, f))
 
     if oversized_main or oversized_test:
-        print(f"FAIL GATE 1 — file-size budget (main {MAX_MAIN_LINES} / "
-              f"test {MAX_TEST_LINES}):")
+        print(f"FAIL GATE 1 — file-size budget, non-comment lines "
+              f"(main {MAX_MAIN_LINES} / test {MAX_TEST_LINES}):")
         for n, f in sorted(oversized_main, reverse=True):
             print(f"  - {f.relative_to(ROOT).as_posix()}: {n} lines (main)")
         for n, f in sorted(oversized_test, reverse=True):

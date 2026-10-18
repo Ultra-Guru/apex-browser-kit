@@ -77,7 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Core purity (zero-Android + one-way dependency arrow)
         run: python3 scripts/check_core_purity.py
@@ -93,7 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Secrets (no credential literals / concrete secret assignments)
         run: python3 scripts/check_secrets.py
@@ -112,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resource prefix + values/values-en mirror + placeholder parity
         run: python3 scripts/check_resources.py
@@ -121,17 +121,13 @@ jobs:
     name: Structural Quality (size budget + anti-patterns)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      # 预算豁免（PR #2 rebase 后据实校准）：BrowserEngine.kt 现 1354 行 ——
-      # 语义上仍是「WebView 门面 + 会话/标签生命周期 + 全部动作 API」的内聚单元，
-      # 分类逻辑已下沉 PageClassifier、脚本已下沉 BrowserScript。继续拆分
-      # （input/click/extract 各自成文件）只会搬运 @Published API 壳并引入
-      # 构造注入噪音，消费者（宿主 consumer-check）零收益。在此一次性放宽
-      # 主源码预算 1200 → 1400 并说明理由；新文件仍按 1200 约束。
-      MAX_MAIN_LINES: "1400"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
+      # v1.3.0 起撤除 MAX_MAIN_LINES=1400 豁免：GATE 1 预算改按**非注释行**计
+      # （KDoc 不占预算——文档从来不是本门禁针对的风险）。BrowserEngine.kt
+      # 现 ~1121 非注释行，回到标准 1200 预算内，本地 ./test.sh gates 与 CI
+      # 同口径，不再需要环境变量分裂。
       - name: File-size budget + anti-pattern gates
         run: python3 scripts/check_code_quality.py
 
@@ -147,7 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Each script copies the repo to a temp dir, injects a REAL violation, and
       # asserts the gate fails. Guards against silent regex rot.
@@ -181,7 +177,7 @@ jobs:
     timeout-minutes: 5
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Publish summary
         run: |
           MAIN=$(find . -name "*.kt" -path "*/src/main/*" -not -path "./.git/*" -not -path "*/build/*" | wc -l)

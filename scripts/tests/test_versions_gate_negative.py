@@ -80,7 +80,11 @@ def mutate_stale_readme(repo: Path) -> None:
 def mutate_matrix_drift(repo: Path) -> None:
     f = repo / "README.md"
     s = f.read_text(encoding="utf-8")
-    new = s.replace("| Kotlin | 2.0.21 |", "| Kotlin | 9.9.9 |")
+    # 兼容矩阵随工具链列车前进（2.0.21 -> 2.2.21 -> ...）—— 从 README 现值
+    # 动态取 Kotlin 行再漂移，mutation 不再绑死某个具体版本号。
+    m = re.search(r"\| Kotlin \| (\S+) \|", s)
+    assert m, "README compat matrix missing the Kotlin row"
+    new = s.replace(f"| Kotlin | {m.group(1)} |", "| Kotlin | 9.9.9 |", 1)
     assert new != s, "mutation did not apply"
     f.write_text(new, encoding="utf-8")
 

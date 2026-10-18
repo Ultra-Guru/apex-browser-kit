@@ -5,6 +5,7 @@ import android.util.Log
 import android.webkit.WebView
 import com.apex.browser.engine.BrowserEngine
 import com.apex.browser.chrome.BrowserEngineGateway
+import com.apex.browser.chrome.ChromeStrings
 import com.apex.browser.chrome.HistoryEntry
 import com.apex.browser.chrome.JsDialogChoice
 import com.apex.browser.chrome.JsDialogRequest
@@ -44,10 +45,14 @@ import kotlinx.coroutines.launch
  * ```
  *
  * 库化改造：去 Hilt —— 单例语义由 [ApexChromeWiringFactory] 提供（F1：库不依赖 DI 框架）。
+ *
+ * v1.2.0：JS 弹窗按钮审计标签（choiceLabel）改经 [strings] 注入（默认
+ * [ChromeStrings.DEFAULT] 即中文，与旧硬编码逐字一致）；逻辑层文案不再硬编码。
  */
 class ApexChromeWiring(
     appContext: Context,
     private val engine: BrowserEngine,
+    private val strings: ChromeStrings = ChromeStrings.DEFAULT,
 ) : BrowserEngine.BrowserUiCallback {
 
     private val scope = CoroutineScope(
@@ -147,9 +152,9 @@ class ApexChromeWiring(
             .map { HistoryEntry(url = it, title = "") }
 
     private fun choiceLabel(choice: JsDialogChoice): String = when (choice) {
-        JsDialogChoice.POSITIVE -> "确认"
-        JsDialogChoice.NEGATIVE -> "拒绝"
-        JsDialogChoice.DISMISS -> "关闭"
+        JsDialogChoice.POSITIVE -> strings.jsDialogConfirmLabel
+        JsDialogChoice.NEGATIVE -> strings.jsDialogDenyLabel
+        JsDialogChoice.DISMISS -> strings.jsDialogDismissLabel
     }
 }
 
@@ -193,9 +198,17 @@ object ApexChromeWiringFactory {
     @Volatile
     private var instance: ApexChromeWiring? = null
 
-    fun get(appContext: Context, engine: BrowserEngine): ApexChromeWiring =
+    /**
+     * 首次调用的 [strings] 生效（单例语义）：后续带不同 strings 的调用会拿到
+     * 已建实例 —— 需要切换文案实现时请重置（[reset]）或保证首次就传入。
+     */
+    fun get(
+        appContext: Context,
+        engine: BrowserEngine,
+        strings: ChromeStrings = ChromeStrings.DEFAULT,
+    ): ApexChromeWiring =
         instance ?: synchronized(this) {
-            instance ?: ApexChromeWiring(appContext, engine).also { instance = it }
+            instance ?: ApexChromeWiring(appContext, engine, strings).also { instance = it }
         }
 
     /** 仅测试用：重置单例。 */

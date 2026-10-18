@@ -12,7 +12,7 @@ Embedded WebView automation engine with Compose chrome UI — 从
 |---|---|---|
 | `:browser-core` | 纯 Kotlin JVM（零 Android 依赖） | DOM 模型（`DomElement`/`PageSnapshot`）、注入 JS（`BrowserScript`）、快照解析（`DomParser`）、重试/熔断（`RetryPolicy`/`CircuitBreaker`） |
 | `:browser-engine` | Android Library（无 UI） | 无头 WebView 自动化引擎（`BrowserEngine`）：状态机、标签管理、物理触摸注入、加载等待、Cookie 持久化、崩溃恢复 |
-| `:browser-chrome` | Android Library（Compose UI） | 「给人用的浏览器界面」：地址胶囊即进度条、标签条/总览、页内查找、下载面板、JS 弹窗/权限浮层、浮窗宿主（`BrowserOverlay`） |
+| `:browser-chrome` | Android Library（Compose UI + 纯 View 实时窗） | 「给人用的浏览器界面」：地址胶囊即进度条、标签条/总览、页内查找、下载面板、JS 弹窗/权限浮层、全屏接管浮窗（`BrowserOverlay`）、透明实时页面悬浮窗（`LiveViewOverlay`，v1.4.0）、App 内嵌浏览器宿主（`InAppChromeHost` + 承载仲裁，v1.5.0） |
 
 依赖方向：`chrome → engine → core`（`api` 传递，下游引 chrome 即得全套类型）。
 
@@ -91,9 +91,9 @@ if (file("../apex-browser-kit").isDirectory) {
 
 ```kotlin
 dependencies {
-    implementation("com.apex.browser:browser-core:1.1.0")
-    implementation("com.apex.browser:browser-engine:1.1.0")
-    implementation("com.apex.browser:browser-chrome:1.1.0")
+    implementation("com.apex.browser:browser-core:1.5.0")
+    implementation("com.apex.browser:browser-engine:1.5.0")
+    implementation("com.apex.browser:browser-chrome:1.5.0")
 }
 ```
 
@@ -227,7 +227,8 @@ cron 轮询兜底（防丢事件），`gradle/browser-kit.lock` 保证宿主构�
 - `BrowserAgentTools`（browser_* 工具协议：依赖宿主 `AgentTool`/`StreamingAgentTool`）
 - `CyberNeonBallManager` / `NeonRingView`（宿主视觉装饰）
 - 宿主 DI 接线模块（Hilt）
-- `plugin-web-automation` 插件 APK（宿主插件体系分发壳，与本库无版本耦合）
+- `plugin-web-automation` 插件 APK —— 宿主已将其移除，浏览器自动化改以内置
+  `:platform:browser-agent` 模块形态集成（见宿主仓库 PR）
 
 ## v1.1.0 变更（Agent 可靠性与高级功能）
 
@@ -266,14 +267,217 @@ cron 轮询兜底（防丢事件），`gradle/browser-kit.lock` 保证宿主构�
 
 版本：三模块 1.0.0 → **1.1.0**（additive API + 默认参数扩展，宿主源码兼容）。
 
+## v1.2.0 变更（逻辑层文案注入与发布工程）
+
+### ChromeStrings 注入（已知取舍 #1 消解）
+
+chrome 层有三处用户可见文案产生于**逻辑层**而非 Compose 上下文（`stringResource`
+不可达）：`BrowserChromeController` 的 6 条 snackbar、`SuggestionsBuilder` 的
+4 条联想副标题、`ApexChromeWiring` 的 3 条 JS 弹窗按钮审计标签 —— v1.0.0 起
+硬编码中文。v1.2.0 把这 13 条收敛为 `ChromeStrings` 注入接口：
+
+- `ZhChromeStrings`（默认，`ChromeStrings.DEFAULT`）：与旧硬编码**逐字一致**，
+  不注入即行为零变化；
+- `EnglishChromeStrings`：词汇与 `values-en` 镜像同一套语感
+  （Paste and go / URL / Search / Confirm / Deny / Close …）；
+- 任意自译实现（其他语言 / 品牌语气）。
+
+接入是**带默认值的尾参**，现有调用点零改动（源码兼容）：
+
+```kotlin
+// 控制器直构（BrowserChrome 的 controller 参数同款注入点）
+val controller = BrowserChromeController(gateway, scripts, config, EnglishChromeStrings)
+
+// 接线器工厂（宿主 DI Module 里同款）
+val wiring = ApexChromeWiringFactory.get(ctx, engine, EnglishChromeStrings)
+```
+
+> `ApexChromeWiringFactory` 是进程级单例：**首次**调用的 `strings` 生效，切换
+> 实现请保证首次就传入（或测试里 `reset()`）。`SuggestionsBuilder.build` 的
+> `strings` 尾参由控制器自动透传，纯函数调用方也可独立注入。
+
+Compose UI 层文案继续走 `res/values` + `values-en`（`browser_` 前缀强制），
+两套机制各管一层：UI 层跟系统语言，逻辑层跟注入实现。契约由
+`ChromeStringsTest` 锁定（中文逐字一致 / 两实现 13 条非空 / `tabSwitchHint`
+含 host / 接口成员计数防漂移）。
+
+### 发布工程
+
+| 项 | 说明 |
+|---|---|
+| `tag-release.yml` | push main 自动读三模块 `version =`（分裂即 fail，与 `check_versions.py` RULE 1 同口径），无对应 tag 则 `git tag vX.Y.Z` 并推送（幂等：已存在跳过不报错；版本回退只跳过不强推）。tag push 不会点燃 `notify-host.yml`（其 `on:` 仅 `push.branches=[main]`，且 GITHUB_TOKEN push 本就不触发 workflow，双保险） |
+| 版本可追溯 | 此前版本只存在于 `build.gradle.kts`、从未留下 git tag；现在每个发布列车落成 `vTag`，坐标 ↔ 源码状态一一对应 |
+
+版本：三模块 1.1.0 → **1.2.0**（additive API，全部为带默认值参数的尾参扩展，
+宿主源码兼容）。
+
+## v1.5.0 变更（App 内嵌浏览器宿主 / 三承载面互斥仲裁）
+
+### App 内嵌浏览器宿主（`InAppChromeHost`，新增）
+
+- **零悬浮窗权限的完整浏览器**：本库的可视层此前只有系统悬浮窗
+  （`TYPE_APPLICATION_OVERLAY`，需 `SYSTEM_ALERT_WINDOW` 特殊权限，无权限时
+  静默降级）—— 权限未授予的宿主用户永远看不见浏览器。`InAppChromeHost`
+  把引擎活动 WebView 连同完整 `BrowserChrome` 嵌进宿主 **App 自己的窗口**
+  （Activity 组合树内 `AndroidView` 容器），浏览器从此**无条件可用**；
+- **四动作生命周期**（全主线程）：`attach`（页面进入组合：承载权 claim +
+  wiring resync 对齐 chrome 数据源 + 换挂活动 WebView）/ `detach`（页面离开
+  组合：WebView 归还引擎无头驱动）/ `pause`（Activity ON_PAUSE：让出承载权，
+  悬浮窗可视层可接管）/ `resume`（ON_RESUME：重新换挂）；
+- **换挂走引擎多播**：订阅 `BrowserEngine.ActiveTabListener`（而非 wiring 的
+  单回调 var，不与 `BrowserOverlay` 抢占）—— 标签切换/新建/崩溃重建自动换页；
+- 宿主接法：`InAppChromeHostFactory.get(engine, wiring)` 注册进宿主 DI
+  （与另两个工厂同款单例纪律）。
+
+### P1 渲染修复：接管浮窗「有 chrome 无页面」（`BrowserChrome` 页区透明）
+
+- 旧实现根 Column 恒刷不透明 `palette.background`，而真实 WebView 宿主在
+  **组合树之外**（同窗口兄弟 View 层）—— 不透明底色把 WebView 整个盖住：
+  人工接管浮窗展开后只见地址栏 + 一块纯色页区，**页面内容从未显示过**
+  （ChromeBar / TabStrip 自带不透明底，根底色对头部是冗余双重绘制）；
+- 修复：`BrowserChrome` 新增 `transparentPageArea: Boolean = false`（默认
+  保持旧视觉，页区由 pageSlot 自绘的消费者零影响）；`BrowserOverlay` 传
+  true —— 页区透出真实 WebView，`InAppChromeHost` 消费方同款传法。
+
+### 三承载面互斥仲裁（`InAppHostingArbiter`，新增）
+
+- 同一 WebView 同一时刻只能有一个父容器：in-app 容器 / 全屏接管浮窗 /
+  实时页面卡片三个承载面需要一个进程级裁决点；
+- **in-app 承载期间**：`BrowserOverlay` 的 WAITING_HUMAN 不再自动展开（
+  in-app chrome 就是人的 UI），已展开则收起；`LiveViewOverlay` 可见卡片转
+  GHOST（页面在 App 内直接可见，换挂/自愈同步被守卫拦下，不抢 WebView）；
+- **in-app 退场**（页面离开/Activity 暂停）：接管浮窗按 WAITING_HUMAN 补
+  展开、实时卡片按引擎状态机重放 —— 用户离开 App 后悬浮窗体验不变；
+- 纯 JVM 无 Android 依赖，契约由 `InAppHostingArbiterTest` 八项断言锁定
+  （幂等迁移/通知一次/注销停止/自注销不 CME/异常不传播）。
+
+版本：三模块 1.4.0 → **1.5.0**（additive API；`InAppChromeHost` /
+`InAppChromeHostFactory` / `InAppHostingArbiter` 均为新增，两个既有浮窗仅
+加守卫分支，无破坏性变更）。
+
+## v1.4.0 变更（实时页面悬浮窗 / 悬浮窗 P0 崩溃修复 / 活动标签广播）
+
+### 透明实时页面悬浮窗（`LiveViewOverlay`，新增）
+
+- **Agent 一用浏览器就自动弹出**：订阅引擎状态机，`AGENT_DRIVING` 即呈现
+  透明玻璃卡片浮窗（85 屏宽 × 60 屏高、居中可拖动、PixelFormat.TRANSLUCENT），
+  页面区直接承载引擎 active WebView —— 用户全程**看见 Agent 正在开的真实页面**；
+- **收起不是断开**：用户「✕」收起后窗口转 GHOST 无头宿主（视图 INVISIBLE +
+  `FLAG_NOT_TOUCHABLE`，窗口保活）——WebView 留在视图树内持续被测量布局，
+  自动化的 CSS→物理坐标换算与命中测试不因脱离窗口而失真；
+- **三态生命周期**（`LiveViewPolicy`，纯 JVM 可测）：VISIBLE 显示 / GHOST
+  隐形宿主 / GONE 整窗移除（会话结束自动复位「用户收起」标记，下次自动弹出恢复）；
+- **纯 View 实现零 Compose**：刻意避开浮窗内 Compose 的
+  ViewTreeLifecycleOwner 系列窗口层级坑（见下条 P0 的同类根源），控制条崩溃面最小；
+- 宿主接法：`LiveViewOverlayFactory.get(context, engine)` 注册进宿主 DI
+  （与 `BrowserOverlayFactory` 同款单例纪律），悬浮球点击 `toggle()`、
+  浏览器功能页「查看实时页面」调 `show()`。
+
+### P0 崩溃修复：`BrowserChrome` 浮窗内 `BackHandler` 主线程崩溃（宿主 #375）
+
+- activity-compose 的 `BackHandler` 在 `enabled=false` 时也会先
+  `checkNotNull(LocalOnBackPressedDispatcherOwner)` —— 悬浮窗 ComposeView 挂在
+  WindowManager（无 Activity 返回栈），该 Local 恒为 null → 组合即抛
+  `IllegalStateException` 杀主线程（crash-1792191618578：浮窗显示后约 20s
+  崩溃，用户观感「点击悬浮球闪退 / agent 用浏览器后卡死重启」）；
+- 修复：无 dispatcher 时整个 `BackHandler` 不进入组合树（条件组合，而非
+  `enabled=false` 短路 —— 旧实现的 `hasBackDispatcher` 守卫防不住这层
+  checkNotNull）。
+
+### 引擎：活动标签广播（`ActiveTabListener`，additive API）
+
+- 标签新建/切换/关闭回落/崩溃重建/长会话重建都会换新活动 WebView，但这类
+  变化**不产生状态机迁移** —— 只订 `BrowserUiCallback` 的可视层拿不到新实例；
+- 新增 `BrowserEngine.addActiveTabListener / removeActiveTabListener`：
+  把「当前应展示哪个 WebView」的变化单独广播（主线程），实时页面悬浮窗据此
+  换挂，Agent 驾驶中切标签实时画面跟随切换。
+
+版本：三模块 1.3.0 → **1.4.0**（additive API + 一个 P0 修复；`LiveViewOverlay`
+/ `LiveViewOverlayFactory` / `LiveViewPolicy` / `ActiveTabListener` 均为新增，
+无破坏性变更）。
+
+## v1.3.0 变更（错误语义 / 快照保真度 / 等待谓词 / 可观测性）
+
+### 错误语义拆分与重试契约兑现（:browser-core + 引擎接线）
+
+- 新增 `PermanentActionException`：操作本身不可能成功的语义错误（对非输入元素
+  `inputText` / `selectOption` 选项不匹配 / 页面侧回传非预期形态）。`withRetry`
+  对其立即上抛——**不烧退避、不计熔断**（旧实现一律抛 `ElementNotFoundException`
+  白耗 3 次退避并推动全局熔断，一个坏元素锁死整段会话）；
+- `CircuitBreaker` 的 `acquire/onSuccess/onFailure` 全部 `@Synchronized`：旧实现
+  `consecutiveFailures++` 非原子，跨线程丢计数导致熔断迟开；
+- 快照超时转译为 `java.util.concurrent.TimeoutException`（可重试集合成员）——
+  旧实现直接把 `TimeoutCancellationException` 上抛，KDoc 承诺的「快照超时视为
+  可重试，熔断保护」从未生效。转译前检查外层协程存活，不破坏结构化取消。
+
+### 快照保真度（:browser-core + 引擎接线）
+
+- **ref 同键去重**：同一 `semanticKey`（列表页同批商品卡/表格同列删除按钮）算出
+  同一 hash，撞键后定位永远命中第一个。第 2+ 次出现追加 `#n` 后缀；
+- **title 修复**：引擎 WebViewClient 此前从未覆写 `onReceivedTitle`，
+  `PageSnapshot.title` 恒为空串；`onPageStarted` 同步复位 `pageFinished`
+  （修 goBack/goForward 后的「假就绪」）；
+- **快照融合**：`PageSnapshot` 追加 `timestampMs`（生成时刻）与 `dialogNotice`
+  （JS 弹窗/SSL 拦截/权限/下载通知，**消费即清**——写入本次快照后随即清空，
+  模型不重复收到同一条）；
+- **a11y 降级源 total 口径修正**：旧 `total = querySelectorAll('*').length`
+  （纯布局节点全计入，`truncated` 几乎恒真），改为循环内语义节点计数。
+
+### 等待谓词扩展（waitForCondition 3 → 7 模式）
+
+| 模式 | 语义 |
+|---|---|
+| `element_gone` / `text_gone` | 选择器/文本从页面**消失**（弹窗、加载态收起判定） |
+| `network_idle` | 在途请求数归零（`NETWORK_MONITOR_JS` 新增 `__apexNetPending` 计数，**连续 2 次为 0** 才算 idle） |
+| `selector_count` | 命中数满足谓词：`"<选择器>>=10"` / `"<=5"` / `"==3"` / `"<选择器> 10"`（纯数字缺省 `>=`，要求与选择器间有空白，避免与 `.item2` 歧义） |
+| `url`（增强） | 改注入 `CURRENT_URL_JS` 求值：SPA pushState 即时反映到 `location.href`，native `webView.url` 只在导航提交时更新 |
+
+### 新增引擎 API（Agent 直驱路径补齐）
+
+| API | 说明 |
+|---|---|
+| `reload(timeoutMs)` | 重载 + 等待就绪（此前宿主只能裸调 `webView.reload()`） |
+| `stopLoading()` | 停止当前页加载（Agent 逃生舱） |
+| `findInPage(query)` | `findAllAsync` + FindListener 桥接，返回命中数 |
+| `engine.tracer` | 引擎内建 `BrowserTracer`（见下） |
+
+### 可观测性接线（`BrowserTracer` 从零到一）
+
+- 引擎持有公开 `tracer` 属性；关键动作（navigate/click/input/select/scroll/
+  snapshot）经 `tracedAction` 包装记录 成败/参数/耗时/会话状态/URL；
+- 系统事件入 trace：渲染进程崩溃 / SSL 拦截 / confirm 自动确认 / 下载入队；
+- `BrowserTracer.Entry` 追加 `error` 尾参（失败边界的错误摘要）；新增
+  `events: SharedFlow<Entry>` 实时事件流（replay=0，DROP_OLDEST——慢消费者丢旧值
+  不阻塞记录路径）；
+- 下载管理：DownloadManager 请求转发会话 `Cookie`（登录态后的导出/附件下载
+  不再 401）；网络监控随 `onPageFinished` 与 `STEALTH_JS` 合并注入（导航重置
+  JS 上下文后不再有监控盲区）。
+
+### 注入边界收敛（安全债清偿）
+
+`locateElements` 的内联 JS（手写转义只覆盖引号，换行 / U+2028 / 控制字符裸拼）
+迁移为 `BrowserScript.locateJs`——参数一律 `JsLiteral.string`，与全库唯一编码
+入口统一。至此 `:browser-engine` 内不再有任何手拼注入 JS。
+
+版本：三模块 1.2.0 → **1.3.0**（additive API；`PageSnapshot` / `BrowserTracer.Entry`
+构造器为带默认值的尾参扩展，宿主源码兼容）。
+
 ## 已知取舍（v1.0.0）
 
-- `BrowserChromeController` 的 5 条 snackbar 文案与 `SuggestionsBuilder` 的联想
-  副标题为**逻辑层字符串**（非 Compose 上下文，`stringResource` 不可达），暂保持
-  硬编码中文；chrome UI 层全部文案已资源化（`res/values` + `values-en`，
-  `browser_` 前缀强制）。
+- 逻辑层文案硬编码中文（`BrowserChromeController` 5 条 snackbar 与
+  `SuggestionsBuilder` 联想副标题，非 Compose 上下文、`stringResource` 不可达）
+  —— **v1.2.0 已消解**：连同 `ApexChromeWiring` 的 3 条 JS 弹窗审计标签共
+  13 条收敛为 `ChromeStrings` 注入接口，默认 `ZhChromeStrings` 与旧硬编码
+  逐字一致，可换 `EnglishChromeStrings` 或自译实现（见「v1.2.0 变更」）。
+  chrome UI 层文案始终资源化（`res/values` + `values-en`，`browser_` 前缀强制）。
 - 库 manifest 不声明 `SYSTEM_ALERT_WINDOW` —— 由宿主自行声明（并非所有消费者都
   需要浮窗，F5）。
+- **v1.3.0**：引擎 `findInPage` 与 chrome 层页内查找共用 WebView 的**单槽**
+  FindListener——Agent 侧调用会替换 chrome `ChainFindListener` 的注册，chrome
+  的计数回填依赖其下次接线时重设监听器（Agent 侧计数优先的取舍）。
+- **v1.3.0**：`locateElements` 迁移到 `BrowserScript.locateJs` 后，
+  `check_js_injection.py` GATE 1 的扫描范围仍为 `BrowserScript.kt`（引擎侧注入
+  JS 已全部收敛到该文件，规则本身无需扩面）。
 
 ## 来源追溯
 

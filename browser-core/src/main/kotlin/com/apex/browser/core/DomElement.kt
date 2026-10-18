@@ -63,6 +63,21 @@ data class PageSnapshot(
     val truncated: Boolean = false,
     /** 页面实际匹配到的元素总数（可能大于 [interactiveCount]，差值即剪枝或截断掉的） */
     val totalCandidateCount: Int = 0,
+    /**
+     * 快照生成时刻（System.currentTimeMillis()，v1.3.0）。
+     *
+     * 消费方据此判断快照新鲜度（多轮对话间页面是否已被自动化/用户改变）、
+     * 对多来源快照排序。0 表示未填充（兼容旧构造点与反序列化旧数据）。
+     */
+    val timestampMs: Long = 0,
+    /**
+     * 本次快照捕获到的 JS 弹窗 / SSL 拦截 / 权限请求 / 下载通知（v1.3.0）。
+     *
+     * 引擎把最近一次未消费的弹窗文本写入快照后**随即清空**（消费即清语义）——
+     * 模型在下一次 snapshot 时必然看到这则通知，而不会反复收到同一条。
+     * null 表示期间无弹窗事件。字段为带默认值的尾参，既有构造点零改动。
+     */
+    val dialogNotice: String? = null,
 )
 
 /** 从 JS 注入点拿到的原始元素（序列化自 injected JS） */
