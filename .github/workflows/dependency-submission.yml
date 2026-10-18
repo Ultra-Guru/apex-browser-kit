@@ -46,7 +46,7 @@ jobs:
         run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Submit dependency graph
         # continue-on-error（rebase 修复）：依赖图提交依赖仓库的 Dependency graph
@@ -55,5 +55,5 @@ jobs:
         # 数据洞察链路而非构建门禁：绝不应让它把 push main 染红、进而挡住
         # notify-host → 宿主 sync 的全绿判定。开启仓库设置后提交即自动生效。
         # 产物（JSON 快照）仍作为 artifact 上传，开启后可回溯。
-        uses: gradle/actions/dependency-submission@v4
+        uses: gradle/actions/dependency-submission@v6
         continue-on-error: true
