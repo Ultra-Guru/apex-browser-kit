@@ -1,9 +1,9 @@
-# apex-browser-kit
+# apex-kit-browser
 
 Embedded WebView automation engine with Compose chrome UI — 从
 [Android-Guru-Agent](https://github.com/Ultra-Guru/Android-Guru-Agent) 拆出的浏览器能力库。
 
-[![CI](https://github.com/Ultra-Guru/apex-browser-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/Ultra-Guru/apex-browser-kit/actions/workflows/ci.yml)
+[![CI](https://github.com/Ultra-Guru/apex-kit-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Ultra-Guru/apex-browser-kit/actions/workflows/ci.yml)
 ![Consumer](https://img.shields.io/badge/consumer-Android--Guru--Agent-blue)
 
 ## 模块结构

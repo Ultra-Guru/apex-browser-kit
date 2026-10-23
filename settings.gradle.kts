@@ -16,7 +16,7 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "apex-browser-kit"
+rootProject.name = "apex-kit-browser"
 include(":browser-core")
 include(":browser-engine")
 include(":browser-chrome")
