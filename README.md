@@ -3,7 +3,7 @@
 Embedded WebView automation engine with Compose chrome UI — 从
 [Android-Guru-Agent](https://github.com/Ultra-Guru/Android-Guru-Agent) 拆出的浏览器能力库。
 
-[![CI](https://github.com/Ultra-Guru/apex-kit-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Ultra-Guru/apex-browser-kit/actions/workflows/ci.yml)
+[![CI](https://github.com/Ultra-Guru/apex-kit-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Ultra-Guru/apex-kit-browser/actions/workflows/ci.yml)
 ![Consumer](https://img.shields.io/badge/consumer-Android--Guru--Agent-blue)
 
 ## 模块结构
@@ -82,8 +82,8 @@ Embedded WebView automation engine with Compose chrome UI — 从
 
 ```kotlin
 // 兄弟目录存在时接入（本地开发 / CI 双仓检出）；不存在则走远端坐标
-if (file("../apex-browser-kit").isDirectory) {
-    includeBuild("../apex-browser-kit")
+if (file("../apex-kit-browser").isDirectory) {
+    includeBuild("../apex-kit-browser")
 }
 ```
 
@@ -109,7 +109,7 @@ dependencies {
 ```kotlin
 repositories {
     maven {
-        url = uri("https://maven.pkg.github.com/AceGuru-mjh/apex-browser-kit")
+        url = uri("https://maven.pkg.github.com/Ultra-Guru/apex-kit-browser")
         credentials {
             username = System.getenv("GITHUB_ACTOR")
             password = System.getenv("GITHUB_TOKEN")

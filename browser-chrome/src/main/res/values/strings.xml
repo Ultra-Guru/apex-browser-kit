@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  apex-browser-kit · browser-chrome 用户可见文案（中文基准，values-en 为英文镜像）
+  apex-kit-browser · browser-chrome 用户可见文案（中文基准，values-en 为英文镜像）
   F2 资源纪律：所有 key 强制 browser_ 前缀（build.gradle.kts resourcePrefix 约束），
   防止与宿主 App 的 R 类冲突。
 -->

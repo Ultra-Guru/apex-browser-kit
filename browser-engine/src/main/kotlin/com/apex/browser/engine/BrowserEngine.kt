@@ -65,7 +65,7 @@ import kotlin.coroutines.resume
  * - P0 缺口补齐：页面加载等待(#1)、动作后验证(#2)、JS 弹窗处理(#3)、渲染进程崩溃恢复(#4)、
  *   动作空间补全 select/toggle(#5)、Cookie 持久化(#6)。
  *
- * 库化改造（自宿主 app 抽出为 apex-browser-kit）：去 Hilt —— 本库不依赖任何 DI
+ * 库化改造（自宿主 app 抽出为 apex-kit-browser）：去 Hilt —— 本库不依赖任何 DI
  * 框架，单例语义由 [BrowserEngineFactory] 提供；宿主如用 Hilt 在自己的 Module 里
  * provide 即可（见仓库 README「消费方式」一节）。
  */

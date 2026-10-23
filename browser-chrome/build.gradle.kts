@@ -62,9 +62,9 @@ mavenPublishing {
         version = "1.5.0",
     )
     pom {
-        name.set("Apex Browser Kit :: Chrome")
+        name.set("Apex Kit Browser :: Chrome")
         description.set("Compose browser chrome UI: address pill, tab strip, find bar, download shelf, JS dialog & permission hosts, overlay window")
-        url.set("https://github.com/Ultra-Guru/apex-browser-kit")
+        url.set("https://github.com/Ultra-Guru/apex-kit-browser")
         licenses {
             license {
                 name.set("MIT")
@@ -72,11 +72,11 @@ mavenPublishing {
             }
         }
         developers {
-            developer { id.set("AceGuru-mjh") }
+            developer { id.set("Ultra-Guru") }
         }
         scm {
-            connection.set("scm:git:git@github.com:Ultra-Guru/apex-browser-kit.git")
-            url.set("https://github.com/Ultra-Guru/apex-browser-kit")
+            connection.set("scm:git:git@github.com:Ultra-Guru/apex-kit-browser.git")
+            url.set("https://github.com/Ultra-Guru/apex-kit-browser")
         }
     }
 }

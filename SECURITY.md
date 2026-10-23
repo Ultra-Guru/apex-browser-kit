@@ -2,7 +2,7 @@
 
 ## Scope
 
-`apex-browser-kit` is a library that executes JavaScript inside a WebView on
+`apex-kit-browser` is a library that executes JavaScript inside a WebView on
 behalf of an AI agent. The interesting attack surface is therefore **not** a
 network listener but the boundary where model-supplied strings become
 page-executed JavaScript.
@@ -21,7 +21,7 @@ build if an injection point appears that bypasses it.
 ## Reporting
 
 Please report suspected vulnerabilities privately via
-[GitHub Security Advisories](https://github.com/Ultra-Guru/apex-browser-kit/security/advisories/new)
+[GitHub Security Advisories](https://github.com/Ultra-Guru/apex-kit-browser/security/advisories/new)
 rather than opening a public issue.
 
 Include: the affected module/version, the injection point, a reproducing `ref`

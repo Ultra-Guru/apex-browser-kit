@@ -183,7 +183,7 @@ jobs:
           MAIN=$(find . -name "*.kt" -path "*/src/main/*" -not -path "./.git/*" -not -path "*/build/*" | wc -l)
           TEST=$(find . -name "*.kt" -path "*/src/test/*" -not -path "./.git/*" -not -path "*/build/*" | wc -l)
           {
-            echo "## 📚 apex-browser-kit inventory"
+            echo "## 📚 apex-kit-browser inventory"
             echo ""
             echo "- Main sources: **$MAIN** Kotlin files"
             echo "- Test sources: **$TEST** Kotlin files"
