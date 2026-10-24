@@ -231,6 +231,16 @@ class BrowserEngine private constructor(
         wv.settings.domStorageEnabled = true
         wv.settings.loadWithOverviewMode = true
         wv.settings.useWideViewPort = true
+        // ★ 双指缩放（用户反馈「弹出的悬浮页面不可以缩放」）：实时页面悬浮窗
+        //   （LiveViewOverlay）/ 全屏接管（BrowserOverlay）/ in-app 浏览器共用
+        //   引擎 WebView —— 此前未开启 zoom 支持（默认 setSupportZoom=false），
+        //   用户无法捏合缩放页面（登录页小字/验证码看不清时刚需）。
+        //   displayZoomControls=false：隐藏系统 +/- 浮动按钮，仅保留捏合手势
+        //   （不遮挡页面内容，视觉与物理触摸注入的坐标换算互不干扰 ——
+        //   缩放状态下 getBoundingClientRect 的坐标换算仍按视口比例进行）。
+        wv.settings.setSupportZoom(true)
+        wv.settings.builtInZoomControls = true
+        wv.settings.displayZoomControls = false
         wv.settings.allowFileAccess = false
         wv.settings.allowContentAccess = false
         wv.settings.allowFileAccessFromFileURLs = false
