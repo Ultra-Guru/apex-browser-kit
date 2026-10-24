@@ -75,9 +75,11 @@ fun BrowserChrome(
     val ui by controller.ui.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
-    // 轻提示文案预取（onCopyLink 是非 Compose lambda，stringResource 须在组合作用域取好）
+    // 轻提示文案预取（onCopyLink / onCopyCleanLink 是非 Compose lambda，stringResource 须在组合作用域取好）
     val snackLinkCopied = stringResource(R.string.browser_snack_link_copied)
     val snackNoLink = stringResource(R.string.browser_snack_no_link)
+    // 干净链接文案：以 0 为格式化锚点取模板，复制时按真实剔除数替换（lambda 内不可调 stringResource）
+    val cleanLinkCopiedPattern = stringResource(R.string.browser_snack_clean_link_copied, 0)
 
     LaunchedEffect(controller) { controller.start(scope) }
     DisposableEffect(controller) {
@@ -154,6 +156,24 @@ fun BrowserChrome(
                                 controller.showSnack(snackNoLink)
                             }
                         },
+                        onCopyCleanLink = {
+                            // v1.7.0：复制干净链接（剔除跟踪参数）；无可剔除参数时
+                            // 回退普通「链接已复制」文案，不制造虚假的隐私获得感
+                            val url = controller.currentUrl()
+                            if (url != null) {
+                                val removed = com.apex.browser.core.UrlCleaner.removedParams(url).size
+                                clipboard.setText(AnnotatedString(com.apex.browser.core.UrlCleaner.clean(url)))
+                                if (removed > 0) {
+                                    controller.showSnack(
+                                        cleanLinkCopiedPattern.replace("0", removed.toString())
+                                    )
+                                } else {
+                                    controller.showSnack(snackLinkCopied)
+                                }
+                            } else {
+                                controller.showSnack(snackNoLink)
+                            }
+                        },
                     )
 
                     handoffBanner?.invoke()
@@ -196,6 +216,10 @@ fun BrowserChrome(
                 registry = scripts,
                 onDismiss = { controller.closeSheet() },
             )
+            // v1.7.0 浮层组：书签 / 显示设置 / 阅读模式
+            BookmarksSheet(ui = ui, gateway = gateway, controller = controller)
+            DisplaySettingsSheet(ui = ui, gateway = gateway, controller = controller)
+            ReaderSheet(visible = ui.readerVisible, gateway = gateway, controller = controller)
             JsDialogHost(gateway = gateway, config = config)
             PermissionRequestHost(gateway = gateway)
         }

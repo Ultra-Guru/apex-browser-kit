@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.apex.browser.chrome.BrowserEngineGateway
+import com.apex.browser.chrome.ChromeBookmark
+import com.apex.browser.chrome.ChromeDisplaySettings
 import com.apex.browser.chrome.DownloadItem
 import com.apex.browser.chrome.EngineSnapshot
 import com.apex.browser.chrome.HistoryEntry
@@ -70,6 +72,8 @@ class BrowserEngineGatewayAdapter(
     snapshotSource: Flow<EngineSnapshot>? = null,
     /** 历史联想数据源（可选；NeonChromeWiring 构造参数 historySource 会传到这里）。 */
     private val historySource: (suspend (query: String, limit: Int) -> List<HistoryEntry>)? = null,
+    /** v1.7.0：会话增强能力束（书签 / 显示设置 / 阅读模式）；null = 能力未接线（菜单项隐藏）。 */
+    private val sessionControls: ChromeSessionControls? = null,
 ) : BrowserEngineGateway {
 
     private val _state = MutableStateFlow(EngineSnapshot())
@@ -156,6 +160,43 @@ class BrowserEngineGatewayAdapter(
         // [可选] 接你们的浏览历史存储；默认返回空（地址栏仅少一类联想，不影响其他功能）。
         return historySource?.invoke(query, limit) ?: emptyList()
     }
+
+    /* ---- v1.7.0：会话增强（能力未接线时保持接口默认行为：隐藏 / 空操作） ---- */
+
+    override fun bookmarksOrNull(): StateFlow<List<ChromeBookmark>>? =
+        sessionControls?.bookmarks
+
+    override fun addBookmark(url: String, title: String): Boolean =
+        sessionControls?.addBookmark(url, title) ?: false
+
+    override fun removeBookmark(id: String): Boolean =
+        sessionControls?.removeBookmark(id) ?: false
+
+    override fun touchBookmark(id: String) {
+        sessionControls?.touchBookmark(id)
+    }
+
+    override fun displaySettingsOrNull(): StateFlow<ChromeDisplaySettings>? =
+        sessionControls?.displaySettings
+
+    override fun setTextZoom(percent: Int) {
+        sessionControls?.setTextZoom(percent)
+    }
+
+    override fun setForceDark(enabled: Boolean) {
+        sessionControls?.setForceDark(enabled)
+    }
+
+    override fun clearBrowsingData(clearCookies: Boolean, clearCaches: Boolean, clearHistories: Boolean) {
+        sessionControls?.clearBrowsingData(clearCookies, clearCaches, clearHistories)
+    }
+
+    override fun reapplyDisplayForLoadedPage() {
+        sessionControls?.reapplyForLoadedPage()
+    }
+
+    override suspend fun renderReaderPage(): com.apex.browser.core.ReaderDocument? =
+        sessionControls?.renderReaderPage()
 
     companion object {
         /** 引擎快照构造辅助：把原始标签信息组装成 TabCard（host/isSecure 自动推导）。 */

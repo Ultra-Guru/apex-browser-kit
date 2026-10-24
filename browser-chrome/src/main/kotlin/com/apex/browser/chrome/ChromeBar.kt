@@ -62,6 +62,7 @@ internal fun ChromeBar(
     ui: ChromeUiState,
     controller: BrowserChromeController,
     onCopyLink: () -> Unit,
+    onCopyCleanLink: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isEditing = ui.address is AddressBarUi.Editing
@@ -81,6 +82,7 @@ internal fun ChromeBar(
                     ui = ui,
                     controller = controller,
                     onCopyLink = onCopyLink,
+                    onCopyCleanLink = onCopyCleanLink,
                 )
             }
         }
@@ -97,6 +99,7 @@ private fun CollapsedNavRow(
     ui: ChromeUiState,
     controller: BrowserChromeController,
     onCopyLink: () -> Unit,
+    onCopyCleanLink: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -152,6 +155,7 @@ private fun CollapsedNavRow(
             ui = ui,
             controller = controller,
             onCopyLink = onCopyLink,
+            onCopyCleanLink = onCopyCleanLink,
         )
     }
 }

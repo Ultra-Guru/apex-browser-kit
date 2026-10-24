@@ -45,6 +45,10 @@ class BrowserChromeController(
     private val sheet = MutableStateFlow<ChromeSheet?>(null)
     private val findVisible = MutableStateFlow(false)
     private val closingIds = MutableStateFlow<Set<String>>(emptySet())
+    private val readerVisible = MutableStateFlow(false)
+
+    /** v1.7.0：浮层可见位合并（sheet/find/reader 三源并为单源，避开 combine 五流上限）。 */
+    private val overlayBits = combine(sheet, findVisible, readerVisible) { s, f, r -> Triple(s, f, r) }
 
     private var scope: kotlinx.coroutines.CoroutineScope? = null
     private var collector: Job? = null
@@ -62,9 +66,9 @@ class BrowserChromeController(
         this.scope = scope
         collector = scope.launch {
             combine(
-                gateway.state, editing, sheet, findVisible, closingIds,
-            ) { snap, edit, sheetV, findV, closingV ->
-                render(snap, edit, sheetV, findV, closingV)
+                gateway.state, editing, overlayBits, closingIds,
+            ) { snap, edit, bits, closingV ->
+                render(snap, edit, bits.first, bits.second, bits.third, closingV)
             }.collect { _ui.value = it }
         }
     }
@@ -82,6 +86,7 @@ class BrowserChromeController(
         edit: EditSession?,
         sheetV: ChromeSheet?,
         findV: Boolean,
+        readerV: Boolean,
         closingV: Set<String>,
     ): ChromeUiState {
         val active = snap.tabs.firstOrNull { it.id == snap.activeTabId }
@@ -107,6 +112,9 @@ class BrowserChromeController(
             sheet = sheetV,
             desktopMode = snap.desktopMode,
             tabStripVisible = snap.tabs.size > 1 || !config.hideTabStripWhenSingle,
+            readerVisible = readerV,
+            bookmarksAvailable = gateway.bookmarksOrNull() != null,
+            displaySettingsAvailable = gateway.displaySettingsOrNull() != null,
         )
     }
 
@@ -278,6 +286,9 @@ class BrowserChromeController(
 
     fun openSheet(s: ChromeSheet) {
         if (s == ChromeSheet.SCRIPTS && scripts == null) return
+        // v1.7.0：可选能力面（书签 / 显示设置）未接线时不可开（与 SCRIPTS 同纪律）
+        if (s == ChromeSheet.BOOKMARKS && gateway.bookmarksOrNull() == null) return
+        if (s == ChromeSheet.DISPLAY && gateway.displaySettingsOrNull() == null) return
         sheet.value = s
     }
 
@@ -295,6 +306,50 @@ class BrowserChromeController(
         currentUrl()?.let { gateway.openInExternalBrowser(it) }
     }
 
+    /* ---------------- v1.7.0：阅读模式 / 书签 / 显示设置 ---------------- */
+
+    /** 打开阅读模式全屏层（文档采集由 ReaderSheet 内部调 gateway.renderReaderPage）。 */
+    fun openReaderMode() {
+        readerVisible.value = true
+    }
+
+    fun closeReaderMode() {
+        readerVisible.value = false
+    }
+
+    /** 收藏当前页（标题取活动标签，无标题退化 host）。返回 false = 未接线/无页面。 */
+    fun addBookmarkForCurrentPage(): Boolean {
+        val tab = _ui.value.activeTab ?: return false
+        if (tab.url.isBlank()) return false
+        val ok = gateway.addBookmark(tab.url, tab.title.ifBlank { tab.host })
+        if (ok) showSnack(strings.snackBookmarkAdded)
+        return ok
+    }
+
+    /** 删除书签并轻提示（BookmarksSheet 行内删除按钮用）。 */
+    fun removeBookmark(id: String) {
+        if (gateway.removeBookmark(id)) showSnack(strings.snackBookmarkRemoved)
+    }
+
+    /** 通过书签打开（打卡 MRU + 导航 + 关面板）。 */
+    fun openBookmark(bookmark: ChromeBookmark) {
+        gateway.touchBookmark(bookmark.id)
+        gateway.loadUrl(bookmark.url)
+        closeSheet()
+    }
+
+    /** 文字缩放生效（带轻提示；DisplaySettingsSheet 的快速档位与滑杆共用）。 */
+    fun setTextZoom(percent: Int) {
+        gateway.setTextZoom(percent)
+        showSnack(strings.textZoomHint(percent))
+    }
+
+    /** 清除浏览数据（DisplaySettingsSheet 确认后调；回调里发轻提示）。 */
+    fun clearBrowsingData(clearCookies: Boolean, clearCaches: Boolean, clearHistories: Boolean) {
+        gateway.clearBrowsingData(clearCookies, clearCaches, clearHistories)
+        showSnack(strings.snackClearedData)
+    }
+
     fun onMenuAction(action: ChromeMenuAction) {
         when (action) {
             ChromeMenuAction.NewTab -> newTab()
@@ -307,13 +362,20 @@ class BrowserChromeController(
             ChromeMenuAction.Downloads -> openSheet(ChromeSheet.DOWNLOADS)
             ChromeMenuAction.Userscripts -> openSheet(ChromeSheet.SCRIPTS)
             ChromeMenuAction.OpenExternal -> openExternal()
+            ChromeMenuAction.Bookmarks -> openSheet(ChromeSheet.BOOKMARKS)
+            ChromeMenuAction.ReaderMode -> openReaderMode()
+            ChromeMenuAction.DisplaySettings -> openSheet(ChromeSheet.DISPLAY)
+            ChromeMenuAction.CopyCleanLink -> Unit // 由 ChromeBar 用剪贴板处理（宿主回调）
         }
     }
 
     /* ---------------- 系统返回键 ---------------- */
 
-    /** 返回 true 表示 Chrome 已消费（编辑态 → 查找 → 浮层，依次让位）。 */
+    /** 返回 true 表示 Chrome 已消费（阅读层 → 编辑态 → 查找 → 浮层，依次让位）。 */
     fun handleBack(): Boolean {
+        if (readerVisible.value) {
+            closeReaderMode(); return true
+        }
         if (editing.value != null) {
             exitAddressEdit(); return true
         }

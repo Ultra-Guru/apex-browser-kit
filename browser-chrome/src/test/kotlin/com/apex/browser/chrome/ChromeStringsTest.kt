@@ -8,14 +8,15 @@ import java.lang.reflect.Modifier
 /*
  * ChromeStrings 契约测试（已知取舍 #1 消解的回归锁，纯 JVM 可跑）：
  * - Zh 实现与 v1.1.0 硬编码逐字一致 —— 注入机制落地必须行为零变化；
- * - Zh / English 两实现全部 13 条文案非空（防「加成员忘翻译」漂移）；
+ * - Zh / English 两实现全部 18 条文案非空（防「加成员忘翻译」漂移）；
  * - tabSwitchHint 必须包含 host（用户靠它辨认目标站点）；
- * - 接口抽象成员数锁定 13 —— 未来新增文案成员时本测试转红，
+ * - 接口抽象成员数锁定 18（v1.7.0 +5：书签/阅读/清除/缩放文案）——
+ *   未来新增文案成员时本测试转红，
  *   逼着同步补两实现与断言，而不是只改一处悄悄漏掉另一处。
  */
 class ChromeStringsTest {
 
-    /** 全部 13 条成员的取值清单（接口新增成员时必须同步扩这里）。 */
+    /** 全部 18 条成员的取值清单（接口新增成员时必须同步扩这里）。 */
     private fun allStrings(s: ChromeStrings): List<String> = listOf(
         s.snackTabClosed,
         s.snackUndo,
@@ -30,6 +31,11 @@ class ChromeStringsTest {
         s.jsDialogDenyLabel,
         s.jsDialogDismissLabel,
         s.tabSwitchHint("example.com"),
+        s.snackBookmarkAdded,
+        s.snackBookmarkRemoved,
+        s.snackReaderUnavailable,
+        s.snackClearedData,
+        s.textZoomHint(120),
     )
 
     @Test
@@ -48,21 +54,27 @@ class ChromeStringsTest {
         assertEquals("拒绝", zh.jsDialogDenyLabel)
         assertEquals("关闭", zh.jsDialogDismissLabel)
         assertEquals("切换 · example.com", zh.tabSwitchHint("example.com"))
+        // v1.7.0 新增五条：逐字锁定（注入机制的「行为零变化」契约延续）
+        assertEquals("已加入书签（重复页面自动更新）", zh.snackBookmarkAdded)
+        assertEquals("已移除书签", zh.snackBookmarkRemoved)
+        assertEquals("当前页面不适合阅读模式", zh.snackReaderUnavailable)
+        assertEquals("已清除浏览数据", zh.snackClearedData)
+        assertEquals("文字缩放已设为 120%", zh.textZoomHint(120))
     }
 
     @Test
-    fun `中文实现 13 条全部非空`() {
+    fun `中文实现 18 条全部非空`() {
         val values = allStrings(ZhChromeStrings)
-        assertEquals(13, values.size)
+        assertEquals(18, values.size)
         values.forEachIndexed { i, v ->
             assertTrue("Zh 第 $i 条文案为空", v.isNotBlank())
         }
     }
 
     @Test
-    fun `英文实现 13 条全部非空`() {
+    fun `英文实现 18 条全部非空`() {
         val values = allStrings(EnglishChromeStrings)
-        assertEquals(13, values.size)
+        assertEquals(18, values.size)
         values.forEachIndexed { i, v ->
             assertTrue("English 第 $i 条文案为空", v.isNotBlank())
         }
@@ -91,12 +103,19 @@ class ChromeStringsTest {
     }
 
     @Test
-    fun `接口抽象成员数锁定 13（新增成员须同步两实现与本测试）`() {
-        // 12 个 val 属性（→ 12 个抽象 getter）+ 1 个带参 fun = 13。
+    fun `接口抽象成员数锁定 18（新增成员须同步两实现与本测试）`() {
+        // 16 个 val 属性（→ 16 个抽象 getter）+ 2 个带参 fun = 18。
         // 过滤 synthetic（桥方法）与非抽象（companion 静态访问器等），
         // 只数接口自身声明的抽象成员。
         val declared = ChromeStrings::class.java.declaredMethods
             .filter { !it.isSynthetic && Modifier.isAbstract(it.modifiers) }
-        assertEquals(13, declared.size)
+        assertEquals(18, declared.size)
+    }
+
+    @Test
+    fun `textZoomHint 必须包含数值`() {
+        listOf(ZhChromeStrings, EnglishChromeStrings).forEach { s ->
+            assertTrue("hint 缺数值：${s.textZoomHint(85)}", s.textZoomHint(85).contains("85"))
+        }
     }
 }
