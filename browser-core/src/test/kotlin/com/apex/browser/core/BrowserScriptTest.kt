@@ -262,6 +262,15 @@ class BrowserScriptTest {
     }
 
     @Test
+    fun `scrollToBoundaryJs 到底走文档高度回顶走零`() {
+        // v1.8.0：超长页面一步到底（scrollByJs 受单次上限约束，到底需多次）
+        val bottom = BrowserScript.scrollToBoundaryJs(toBottom = true)
+        assertTrue("到底应滚到文档滚动高度: $bottom", bottom.contains("scrollTo(0, document.documentElement.scrollHeight)"))
+        val top = BrowserScript.scrollToBoundaryJs(toBottom = false)
+        assertTrue("回顶应滚到 0: $top", top.contains("scrollTo(0, 0)"))
+    }
+
+    @Test
     fun `networkLogJs 截取尾部 limit 条且下界受保护`() {
         assertTrue(BrowserScript.networkLogJs(50).contains("slice(-50)"))
         // limit=0 时 slice(-0) == slice(0) 会返回整个数组，必须收敛到 1

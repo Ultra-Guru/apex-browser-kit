@@ -40,6 +40,23 @@ internal fun matchesCount(count: Int, p: CountPredicate): Boolean = when (p.op) 
 }
 
 /**
+ * v1.8.0 提速：等待轮询的自适应间隔。
+ *
+ * 点击/提交后的异步内容多在数百毫秒内到达——固定 300ms 轮询会让「秒到」
+ * 条件平均多等 ~150ms。前 [FAST_PHASE_MS] 内用 [FAST_POLL_MS]（100ms）
+ * 快轮，之后回落调用方给定的 [pollMs]（长等待不放大开销：每次轮询是一次
+ * 毫秒级 evaluateJavascript，快轮期的额外成本可忽略）。
+ */
+internal fun pollIntervalFor(elapsedMs: Long, pollMs: Long): Long =
+    if (elapsedMs < FAST_PHASE_MS) minOf(pollMs, FAST_POLL_MS) else pollMs.coerceIn(100, 2000)
+
+/** 快轮窗口：进入等待后的前 1.2s（覆盖「点击后内容秒到」主场景）。 */
+internal const val FAST_PHASE_MS: Long = 1_200
+
+/** 快轮间隔：100ms（与轮询循环允许的最小间隔一致）。 */
+internal const val FAST_POLL_MS: Long = 100
+
+/**
  * 数值型求值（v1.3.0，internal）：WebView 回传的 JSON 数字串（如 `"3"`）转 Int；
  * 非数值形状（null / 异常）返回 null。network_idle 与 selector_count 轮询的取值侧。
  */
@@ -61,6 +78,9 @@ internal suspend fun WebView.evaluateAsInt(js: String): Int? =
  *
  * 求值器（evaluateBoolean / evaluateJson）由引擎以 lambda 注入：循环逻辑可
  * 独立演进，引擎私有成员可见性不外泄。
+ *
+ * v1.8.0 起轮询间隔自适应（[pollIntervalFor]）：进入等待的前 1.2s 以 100ms
+ * 快轮（异步内容「秒到」场景不再多等整拍），之后回落调用方 pollMs。
  */
 internal suspend fun waitConditionLoop(
     wv: WebView,
@@ -96,7 +116,7 @@ internal suspend fun waitConditionLoop(
             else -> false // 未知模式已在引擎入口拒绝
         }
         if (hit) return BrowserEngine.WaitOutcome(true, "matched $mode", SystemClock.uptimeMillis() - start)
-        delay(pollMs.coerceIn(100, 2000))
+        delay(pollIntervalFor(SystemClock.uptimeMillis() - start, pollMs))
     }
     return BrowserEngine.WaitOutcome(
         false,

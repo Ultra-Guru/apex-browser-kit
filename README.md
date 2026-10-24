@@ -91,9 +91,9 @@ if (file("../apex-kit-browser").isDirectory) {
 
 ```kotlin
 dependencies {
-    implementation("com.apex.browser:browser-core:1.7.0")
-    implementation("com.apex.browser:browser-engine:1.7.0")
-    implementation("com.apex.browser:browser-chrome:1.7.0")
+    implementation("com.apex.browser:browser-core:1.8.0")
+    implementation("com.apex.browser:browser-engine:1.8.0")
+    implementation("com.apex.browser:browser-chrome:1.8.0")
 }
 ```
 
@@ -310,6 +310,53 @@ Compose UI 层文案继续走 `res/values` + `values-en`（`browser_` 前缀强�
 
 版本：三模块 1.1.0 → **1.2.0**（additive API，全部为带默认值参数的尾参扩展，
 宿主源码兼容）。
+
+## v1.8.0 变更（提速列车 + 批量动作：自适应等待 / 去重注入 / 自适应轮询 / batchExecute）
+
+### 速度：动作后固定延迟 → 探针轮询早退（`awaitActionSettle`）
+
+- 旧链路点击后固定 `delay(300~800ms 随机)` 再探针——页面秒响应也要睡满；
+  现改为「等最小窗（click 120ms）后首查探针，URL/标题/交互元素数已变化
+  即返回，否则每 100ms 复查至上限（600ms）」——**典型点击 ~550ms → ~140ms**；
+- 全动作覆盖：click / input（enter 与否分档）/ select / pressKey / hover /
+  drag，各自定制 min/max 预算；无变化动作（toggle 类）仍以 max 封顶，不劣于
+  旧随机上界；
+- 探针子系统（`QuickProbe`/`readQuickProbe`/`probePage`/`awaitActionSettle`）
+  拆出同包 `ActionProbe.kt`（internal，GATE 1 预算纪律；`evaluateJson`
+  随之 private → internal）。
+
+### 速度：snapshot 去重注入 + waitForCondition 自适应轮询
+
+- 每次 snapshot 不再重复执行 `NETWORK_MONITOR_JS`（onPageFinished 已随每次
+  导航注入；`Tab.netHooked` 位图去重，导航重置自动复位）；
+- 等待轮询前 1.2s 用 100ms 快轮（`pollIntervalFor`），之后回落调用方
+  pollMs——「点击后内容秒到」不再多等整拍 300ms；
+- `DomParser.buildSummary` 单行渲染按 bid 缓存（选择/输出两循环复用，不再
+  重复计算 `lineOf`）。
+
+### 功能：批量动作执行（`batchExecute`，表单填写主战场）
+
+- **`BatchAction`**（`:browser-core` 纯 JVM）+ **`BatchActionValidator`**
+  （字段完备性校验，错误提示定位到第几个动作，可单测）；
+- 引擎扩展 `BrowserEngine.batchExecute(actions)`（同包 `BatchExecution.kt`）：
+  一次调用串行执行 ≤8 个动作（click/input/select/press_key/scroll/wait 七
+  类型），逐个带重试/熔断/模糊自愈/动作后验证，**任一失败即停**——把 N 次
+  「模型往返 → 工具执行」压缩为 1 次；
+- `BatchOutcome.summaryLine()` 面向模型的单行摘要。
+
+### 功能：滚动到边界（`scrollToBoundary`）
+
+- `BrowserEngine.scrollToBoundary(toBottom)` 扩展（`ScrollBoundary.kt`）：
+  超长页面一步到底/回顶（`scrollByJs` 受单次上限约束，到底原本需多次调用）。
+
+### 修复：后台视口截图死代码
+
+- `screenshot()` 的提前 return 守卫使 P1-4 手动 measure/layout 兜底永远
+  不可达（未挂浮窗的后台 WebView 截图必返回 null）——移除守卫，兜底路径
+  重新生效。
+
+版本：三模块 1.7.0 → **1.8.0**（additive：新 API 全部为扩展函数/新类型，
+既有成员面零变更，宿主源码兼容）。
 
 ## v1.7.0 变更（细节功能与用户体验补全：书签 / 阅读模式 / 下载中心 / 显示控制 / 全页截图 / 干净链接）
 

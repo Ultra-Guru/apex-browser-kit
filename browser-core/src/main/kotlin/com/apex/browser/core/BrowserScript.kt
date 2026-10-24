@@ -403,6 +403,14 @@ object BrowserScript {
     fun scrollByJs(deltaY: Int): String =
         "(function(){ try { window.scrollBy(0, ${deltaY.coerceIn(-MAX_SCROLL_PX, MAX_SCROLL_PX)}); return true; } catch(e){ return false; } })();"
 
+    /**
+     * 滚动到页面边界（v1.8.0）：toBottom=true 滚到底部（无限滚动触发加载），
+     * false 回顶部。同步返回 true。
+     */
+    fun scrollToBoundaryJs(toBottom: Boolean): String =
+        "(function(){ try { window.scrollTo(0, ${if (toBottom) "document.documentElement.scrollHeight" else "0"}); return true; } catch(e){ return false; } })();"
+
+
     /** 读取网络监控日志尾部 [limit] 条（配合 [NETWORK_MONITOR_JS]） */
     fun networkLogJs(limit: Int): String =
         "JSON.stringify((window.__apexNetLog||[]).slice(-${limit.coerceIn(1, MAX_NETWORK_LOG_ENTRIES)}))"

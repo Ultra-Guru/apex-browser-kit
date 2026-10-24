@@ -203,6 +203,14 @@ class BrowserEngine private constructor(
         var url: String = "",
         /** 页面加载完成信号（onPageFinished 置 true，navigate 时置 false） */
         @Volatile var pageFinished: Boolean = false,
+        /**
+         * v1.8.0 提速：本 Tab 当前 JS 上下文是否已注入网络监控钩子。
+         * onPageFinished 注入后置 true（导航重置 JS 上下文，onPageStarted 置回
+         * false）；snapshot 据此跳过重复注入——旧实现每次快照都执行一遍
+         * NETWORK_MONITOR_JS（脚本有 __apexNetHooked 幂等守卫，但每次仍是
+         * 一次 JS 编译+求值往返）。
+         */
+        @Volatile var netHooked: Boolean = false,
     )
 
     // P0 #11（安全加固基线）：禁止本地文件访问，避免 UXSS / 路径穿越。
@@ -241,7 +249,11 @@ class BrowserEngine private constructor(
             // v1.3.0 修复 goBack/goForward 后状态残留：pageFinished 若不复位，
             // 新导航的 waitForPageFinished 会因旧页遗留的 true 立即「假就绪」。
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                tabs.values.firstOrNull { it.webView === view }?.pageFinished = false
+                tabs.values.firstOrNull { it.webView === view }?.let {
+                    it.pageFinished = false
+                    // 新导航重置 JS 上下文：网络监控钩子随之失效，等待重注入
+                    it.netHooked = false
+                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -259,6 +271,8 @@ class BrowserEngine private constructor(
                 // snapshot 才补注入，监控存在盲区）—— 与 NETWORK_MONITOR_JS 合并
                 // 注入（监控自带 __apexNetHooked 幂等守卫，重复注入无害）。
                 view?.evaluateJavascript(BrowserScript.STEALTH_JS + "\n" + BrowserScript.NETWORK_MONITOR_JS, null)
+                // v1.8.0 提速：记录注入态，snapshot 跳过重复注入（onPageStarted 复位）
+                tabs.values.firstOrNull { it.webView === view }?.netHooked = true
             }
 
             // P0 #4：渲染进程崩溃恢复
@@ -827,8 +841,13 @@ class BrowserEngine private constructor(
         val tab = activeTab() ?: return@withContext emptySnapshot()
         // P1 #7：快照超时视为可重试（主线程偶发卡顿），熔断保护
         val snap = withRetry(retryPolicy, breaker) {
-            // 注入网络监控（#18），首次快照时挂载一次即可
-            runCatching { tab.webView.evaluateJavascript(BrowserScript.NETWORK_MONITOR_JS, null) }
+            // 注入网络监控（#18）。v1.8.0 提速：onPageFinished 已随每次导航注入
+            // （netHooked 置位），此处仅在「未注入」时补一次（CSP 拦截 onPageFinished
+            // 注入、或建页早于钩子引入的存量会话），不再每次快照重复求值。
+            if (!tab.netHooked) {
+                runCatching { tab.webView.evaluateJavascript(BrowserScript.NETWORK_MONITOR_JS, null) }
+                tab.netHooked = true
+            }
             var wrapped = evaluateSnapshotJs(tab.webView, strategy)
             val raw = runCatching {
                 json.parseToJsonElement(wrapped).jsonPrimitive.content
@@ -964,8 +983,9 @@ class BrowserEngine private constructor(
             wv.dispatchTouchEvent(down)
             wv.dispatchTouchEvent(up)
             down.recycle(); up.recycle()
-            delay((300L..800L).random()) // 等待页面响应
-            probePage(wv, before)
+            // v1.8.0 提速：固定 300~800ms 随机等待 → 探针轮询早退（典型点击
+            // ~140ms 即返回；无变化动作以 600ms 封顶，不劣于旧随机上界）
+            awaitActionSettle(wv, before, minMs = 120, maxMs = 600)
         }
         }
     }
@@ -1100,11 +1120,12 @@ class BrowserEngine private constructor(
             }
             if (pressEnter) {
                 evaluateBoolean(wv, BrowserScript.pressKeyJs("enter"))
-                delay(400) // 回车常触发导航/搜索，留出响应窗口
+                // v1.8.0 提速：回车常触发导航/搜索——探针早退等 URL 变化（原固定 400ms）
+                awaitActionSettle(wv, before, minMs = 150, maxMs = 600)
             } else {
-                delay(200)
+                // 纯输入：搜索建议等异步 UI 常在输入后出现（interactiveCount 变化）
+                awaitActionSettle(wv, before, minMs = 80, maxMs = 250)
             }
-            probePage(wv, before)
         }
         }
     }
@@ -1126,9 +1147,9 @@ class BrowserEngine private constructor(
                 if (!ok && fuzzyRelocate(wv, ref) != null) {
                     ok = evaluateBoolean(wv, BrowserScript.selectJs(ref, value, byText))
                 }
-                delay(200)
                 if (ok) {
-                    probePage(wv, before)
+                    // v1.8.0 提速：联动下拉/级联表单异步刷新（原固定 200ms）
+                    awaitActionSettle(wv, before, minMs = 80, maxMs = 400)
                 } else if (queryCssRect(wv, ref) != null) {
                     // 元素在 DOM 里，selectJs 却未命中选项 → 选项不匹配（永久错误）
                     throw PermanentActionException("select 选项不匹配：ref=$ref 无 value=$value（byText=$byText）对应的选项")
@@ -1192,18 +1213,15 @@ class BrowserEngine private constructor(
 
     data class ScrollResult(val scrolled: Boolean, val newElementsDetected: Int = 0)
 
+    // ═════════ v1.8.0 滚动到页面边界 ═════════
+    // scrollToBoundary 见同包 ScrollBoundary.kt 扩展（GATE 1 文件预算）。
+
     // ═════════ 截图（视口，P0 #6 路线图） ═════════
 
     suspend fun screenshot(
         onProgress: ((percent: Int, phase: String) -> Unit)? = null,
     ): ByteArray? = withContext(Dispatchers.Main) {
         val wv = activeTab()?.webView ?: return@withContext null
-        // 边界守卫：引擎是"后台无父"驱动，WebView 从未挂到浮窗时 width/height == 0，
-        // Bitmap.createBitmap(0, 0) 会抛 IllegalArgumentException（width and height must be > 0）。
-        if (wv.width <= 0 || wv.height <= 0) {
-            onProgress?.invoke(100, "视口尚未布局（后台模式），本次截图跳过")
-            return@withContext null
-        }
         onProgress?.invoke(50, "正在渲染视口截图…")
         // P1-4（6-c）：后台（未 attach/layout）WebView 尚未布局时 width/height 均为 0，
         // Bitmap.createBitmap(0,0) 必抛 IllegalArgumentException。先手动 measure/layout
@@ -1252,8 +1270,7 @@ class BrowserEngine private constructor(
         withRetry(retryPolicy, breaker) {
             val before = readQuickProbe(wv)
             val ok = evaluateBoolean(wv, BrowserScript.pressKeyJs(key))
-            delay(300)
-            if (ok) probePage(wv, before)
+            if (ok) awaitActionSettle(wv, before, minMs = 100, maxMs = 500)
             else PostActionState.failed("按键 $key 派发失败")
         }
     }
@@ -1266,8 +1283,10 @@ class BrowserEngine private constructor(
             if (!ok && fuzzyRelocate(wv, ref) != null) {
                 ok = evaluateBoolean(wv, BrowserScript.hoverJs(ref))
             }
-            delay(250)
-            if (ok) probePage(wv) else throw ElementNotFoundException("找不到悬停目标 ref=$ref")
+            if (ok) {
+                // v1.8.0 提速：悬停菜单/tooltip 异步展开（原固定 250ms）
+                awaitActionSettle(wv, readQuickProbe(wv), minMs = 100, maxMs = 400)
+            } else throw ElementNotFoundException("找不到悬停目标 ref=$ref")
         }
     }
 
@@ -1387,10 +1406,15 @@ class BrowserEngine private constructor(
                 val up = android.view.MotionEvent.obtain(downTime, downTime + n * 16L, android.view.MotionEvent.ACTION_UP, x1, y1, 0)
                 wv.dispatchTouchEvent(up)
                 last.recycle(); up.recycle()
-                delay(400)
-                probePage(wv, before)
+                // v1.8.0 提速：拖放落点后的异步 UI 反馈（原固定 400ms）
+                awaitActionSettle(wv, before, minMs = 150, maxMs = 700)
             }
         }
+
+    // ═════════ v1.8.0 批量动作执行 ═════════
+    // batchExecute / BatchOutcome 见同包 BatchExecution.kt（GATE 1 文件预算，
+    // 扩展函数形态；导入方 `import com.apex.browser.engine.batchExecute` 后
+    // 语法与成员方法一致）。
 
     // ═════════ 动作后验证探针（P0 #2） ═════════
 
@@ -1412,46 +1436,9 @@ class BrowserEngine private constructor(
         }
     }
 
-    /**
-     * 页面快照探针（动作前后各读一次）：URL / 标题 / 可交互元素数 / 滚动位。
-     */
-    private class QuickProbe(
-        val url: String,
-        val title: String,
-        val interactiveCount: Int,
-        val scrollY: Int,
-    )
-
-    private suspend fun readQuickProbe(wv: WebView): QuickProbe? {
-        val jsonStr = runCatching { evaluateJson(wv, BrowserScript.POST_ACTION_PROBE_JS) }.getOrNull() ?: return null
-        return runCatching {
-            val obj = json.parseToJsonElement(jsonStr).jsonObject
-            QuickProbe(
-                url = obj["url"]?.jsonPrimitive?.content ?: "",
-                title = obj["title"]?.jsonPrimitive?.content ?: "",
-                interactiveCount = obj["interactiveCount"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
-                scrollY = obj["scrollY"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
-            )
-        }.getOrNull()
-    }
-
-    /**
-     * 动作后探针（v1.1.0 真实 diff）：与动作前 [before] 对比计算 URL 变化与
-     * 元素增量。旧实现 urlChanged 恒 false、newElementsCount 是当前计数
-     * 而非增量——Agent 拿不到「点击是否产生效果」的可靠证据。
-     */
-    private suspend fun probePage(wv: WebView, before: QuickProbe? = null): PostActionState {
-        val after = readQuickProbe(wv)
-            ?: return PostActionState.failed("探针执行失败")
-        return PostActionState(
-            success = true,
-            urlChanged = before != null && before.url != after.url,
-            newElementsCount = if (before != null) (after.interactiveCount - before.interactiveCount).coerceAtLeast(0) else after.interactiveCount,
-            pageTitle = after.title,
-            scrollY = after.scrollY,
-            currentUrl = after.url,
-        )
-    }
+    // ═════════ 探针 / 动作后验证 / 自适应等待（v1.8.0 拆出） ═════════
+    // QuickProbe / readQuickProbe / probePage / awaitActionSettle / probeChanged
+    // 见同包 ActionProbe.kt（internal 扩展；GATE 1 文件预算）。
 
     // ═════════ JS 求值封装 ═════════
 
@@ -1460,7 +1447,7 @@ class BrowserEngine private constructor(
             wv.evaluateJavascript(js) { result -> cont.resume(result == "true") }
         }
 
-    private suspend fun evaluateJson(wv: WebView, js: String): String =
+    internal suspend fun evaluateJson(wv: WebView, js: String): String =
         suspendCancellableCoroutine { cont ->
             wv.evaluateJavascript(js) { result ->
                 cont.resume(unwrapWebViewJson(result ?: "null"))

@@ -1,5 +1,6 @@
 # Public API surface of :browser-engine - COMMITTED BASELINE.
 # Regenerate only with `python scripts/check_api_surface.py --update-baseline` and review the diff.
+browser-engine :: class BatchOutcome(val index: Int, val action: BatchAction, val state: BrowserEngine.PostActionState,)
 browser-engine :: class BookmarkStore private constructor(appContext: Context,)
 browser-engine :: class BrowserEngine private constructor(private val appContext: Context,)
 browser-engine :: class BrowserEngine.BrowserSessionState
@@ -8,7 +9,7 @@ browser-engine :: class BrowserEngine.HandoffLockedException(message: String) : 
 browser-engine :: class BrowserEngine.NavResult(val success: Boolean, val selectorFound: Boolean, val timedOut: Boolean)
 browser-engine :: class BrowserEngine.PostActionState(val success: Boolean, val urlChanged: Boolean = false, val newElementsCount: Int = 0, val pageTitle: String =, val scrollY: Int = 0, val failReason: String? = null, val currentUrl: String =,)
 browser-engine :: class BrowserEngine.ScrollResult(val scrolled: Boolean, val newElementsDetected: Int = 0)
-browser-engine :: class BrowserEngine.Tab(val id: Int, val webView: WebView, var title: String =, var url: String =, @Volatile var pageFinished: Boolean = false,)
+browser-engine :: class BrowserEngine.Tab(val id: Int, val webView: WebView, var title: String =, var url: String =, @Volatile var pageFinished: Boolean = false, @Volatile var netHooked: Boolean = false,)
 browser-engine :: class BrowserEngine.WaitOutcome(val matched: Boolean, val detail: String, val elapsedMs: Long)
 browser-engine :: class BrowserTracer(private val capacity: Int = 100)
 browser-engine :: class BrowserTracer.Entry(val timestamp: String, val tool: String, val params: String, val resultSummary: String, val durationMs: Long, val url: String?, val state: String, val error: String? = null,)
@@ -17,6 +18,7 @@ browser-engine :: class DownloadCenter.DownloadStatus(val dmId: Long, val fileNa
 browser-engine :: class EngineDisplayController private constructor(private val engine: BrowserEngine,)
 browser-engine :: class EngineDisplayController.DisplaySettings(val textZoomPercent: Int = DEFAULT_TEXT_ZOOM, val forceDark: Boolean = false,)
 browser-engine :: class OverlayLifecycleOwner : LifecycleOwner, SavedStateRegistryOwner
+browser-engine :: fun BatchOutcome.summaryLine(): String
 browser-engine :: fun BookmarkStore.add(url: String, title: String, folder: String =): BookmarkCore.AddResult
 browser-engine :: fun BookmarkStore.clearAll(): Int
 browser-engine :: fun BookmarkStore.count(): Int
@@ -32,7 +34,12 @@ browser-engine :: fun BookmarkStore.search(query: String, limit: Int = 50): List
 browser-engine :: fun BookmarkStore.touch(id: String): Boolean
 browser-engine :: fun BookmarkStoreFactory.get(context: Context): BookmarkStore
 browser-engine :: fun BookmarkStoreFactory.reset()
+browser-engine :: fun BrowserEngine .awaitActionSettle(wv: WebView, before: QuickProbe?, minMs: Long, maxMs: Long,): BrowserEngine.PostActionState
+browser-engine :: fun BrowserEngine .batchExecute(actions: List<BatchAction>): List<BatchOutcome>
 browser-engine :: fun BrowserEngine .fullPageScreenshot(maxSegments: Int = DEFAULT_MAX_SEGMENTS, onProgress: ((percent: Int, phase: String) -> Unit)? = null,): ByteArray?
+browser-engine :: fun BrowserEngine .probePage(wv: WebView, before: QuickProbe? = null): BrowserEngine.PostActionState
+browser-engine :: fun BrowserEngine .readQuickProbe(wv: WebView): QuickProbe?
+browser-engine :: fun BrowserEngine .scrollToBoundary(toBottom: Boolean): Boolean
 browser-engine :: fun BrowserEngine.ActiveTabListener.onActiveTabChanged(webView: WebView?)
 browser-engine :: fun BrowserEngine.BrowserUiCallback.onStateChanged(state: BrowserSessionState, url: String?, title: String?)
 browser-engine :: fun BrowserEngine.PostActionState.toText(): String
@@ -72,10 +79,8 @@ browser-engine :: fun BrowserEngine.onTrimMemory(level: Int)
 browser-engine :: fun BrowserEngine.pageType(): PageTypeInfo
 browser-engine :: fun BrowserEngine.performMaintenance()
 browser-engine :: fun BrowserEngine.pressKey(key: String): PostActionState
-browser-engine :: fun BrowserEngine.probePage(wv: WebView, before: QuickProbe? = null): PostActionState
 browser-engine :: fun BrowserEngine.queryCssRect(wv: WebView, ref: String): CssRect?
 browser-engine :: fun BrowserEngine.readElementAtPoint(wv: WebView, cssX: Float, cssY: Float, ref: String): Boolean?
-browser-engine :: fun BrowserEngine.readQuickProbe(wv: WebView): QuickProbe?
 browser-engine :: fun BrowserEngine.recentHistory(limit: Int): List<String>
 browser-engine :: fun BrowserEngine.releaseBrowser()
 browser-engine :: fun BrowserEngine.reload(timeoutMs: Long = 15_000): Boolean
@@ -137,6 +142,9 @@ browser-engine :: object BookmarkStoreFactory
 browser-engine :: object BrowserEngineFactory
 browser-engine :: object DownloadCenterFactory
 browser-engine :: object EngineDisplayControllerFactory
+browser-engine :: val BatchOutcome.action : BatchAction
+browser-engine :: val BatchOutcome.index : Int
+browser-engine :: val BatchOutcome.state : BrowserEngine.PostActionState
 browser-engine :: val BookmarkStore.bookmarks : StateFlow<List<Bookmark>>
 browser-engine :: val BrowserEngine.DownloadRecord.downloadId : Long
 browser-engine :: val BrowserEngine.DownloadRecord.fileName : String
@@ -190,6 +198,7 @@ browser-engine :: val MAX_BITMAP_HEIGHT_PX : Int
 browser-engine :: val OverlayLifecycleOwner.lifecycle : Lifecycle
 browser-engine :: val OverlayLifecycleOwner.savedStateRegistry : SavedStateRegistry
 browser-engine :: val SEGMENT_SETTLE_MS : Long
+browser-engine :: var BrowserEngine.Tab.netHooked : Boolean
 browser-engine :: var BrowserEngine.Tab.pageFinished : Boolean
 browser-engine :: var BrowserEngine.Tab.title : String
 browser-engine :: var BrowserEngine.Tab.url : String

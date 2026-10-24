@@ -130,4 +130,22 @@ class WaitPredicatesTest {
             )
         }
     }
+
+    // ── v1.8.0 自适应轮询间隔 ────────────────────────────────────
+
+    @Test
+    fun `快轮窗口内用 100ms 间隔`() {
+        assertEquals(100L, pollIntervalFor(elapsedMs = 0, pollMs = 300))
+        assertEquals(100L, pollIntervalFor(elapsedMs = FAST_PHASE_MS - 1, pollMs = 300))
+        // 调用方给 150ms（本就低于快轮间隔）：取两者较小值，不被抬高
+        assertEquals(100L, pollIntervalFor(elapsedMs = 0, pollMs = 150))
+    }
+
+    @Test
+    fun `快轮窗口外回落调用方间隔并保持防呆下限`() {
+        assertEquals(300L, pollIntervalFor(elapsedMs = FAST_PHASE_MS, pollMs = 300))
+        assertEquals(300L, pollIntervalFor(elapsedMs = 10_000, pollMs = 300))
+        // 防呆下限仍在：低于 100ms 的调用方值在慢轮阶段被抬回 100
+        assertEquals(100L, pollIntervalFor(elapsedMs = 5_000, pollMs = 10))
+    }
 }

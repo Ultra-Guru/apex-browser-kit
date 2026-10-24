@@ -208,11 +208,15 @@ object DomParser {
                 .thenByDescending { it.label.isNotBlank() }
                 .thenBy { it.bid },
         )
+        // v1.8.0 提速：单行渲染按 bid 缓存一次（选择循环与输出循环各用一遍，
+        // 旧实现重复计算 lineOf —— 大快照下是纯浪费）。
+        val lineByBid = HashMap<Int, String>(elements.size * 2)
+        elements.forEach { lineByBid[it.bid] = lineOf(it) }
         // 先按优先级选出预算内可容纳的集合，再按 bid 渲染。
         val admitted = HashSet<Int>()
         var total = sb.length
         for (e in ranked) {
-            val cost = lineOf(e).length + 1
+            val cost = lineByBid.getValue(e.bid).length + 1
             if (total + cost <= tokenBudget) {
                 admitted += e.bid
                 total += cost
@@ -220,7 +224,7 @@ object DomParser {
         }
         val hidden = elements.size - admitted.size
         for (e in elements) {
-            if (e.bid in admitted) sb.appendLine(lineOf(e))
+            if (e.bid in admitted) sb.appendLine(lineByBid[e.bid])
         }
 
         if (hidden > 0) {

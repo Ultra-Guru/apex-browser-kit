@@ -1,5 +1,7 @@
 # Public API surface of :browser-core - COMMITTED BASELINE.
 # Regenerate only with `python scripts/check_api_surface.py --update-baseline` and review the diff.
+browser-core :: class BatchAction(val type: Type, val ref: String =, val text: String =, val append: Boolean = false, val pressEnter: Boolean = false, val value: String =, val byText: Boolean = false, val key: String =, val waitMode: String =, val waitValue: String =, val waitTimeoutMs: Long = 5_000, val deltaY: Int = 0,)
+browser-core :: class BatchAction.Type
 browser-core :: class Bookmark(val id: String, val url: String, val title: String, val folder: String =, val createdAt: Long = 0L, val lastVisitedAt: Long = 0L, val host: String =,)
 browser-core :: class BookmarkCore(initial: List<Bookmark> = emptyList())
 browser-core :: class BookmarkCore.AddResult
@@ -23,6 +25,7 @@ browser-core :: class ReaderDocument(val url: String, val title: String, val sit
 browser-core :: class Rect(val x: Int, val y: Int, val width: Int, val height: Int)
 browser-core :: class RetryPolicy(val maxRetries: Int = 3, val initialDelayMs: Long = 500, val backoffMultiplier: Double = 2.0, val maxDelayMs: Long = 5000, val retryableExceptions: Set<Class<out Throwable>> = setOf(ElementNotFoundException::class.java, java.util.concurrent.TimeoutException::class.java, WebViewNotRespondingException::class.java,),)
 browser-core :: class WebViewNotRespondingException(message: String) : Exception(message)
+browser-core :: fun BatchActionValidator.check(actions: List<BatchAction>): String?
 browser-core :: fun Bookmark .fallbackTitle(): String
 browser-core :: fun BookmarkCodec.decode(raw: String?): List<Bookmark>
 browser-core :: fun BookmarkCodec.encode(bookmarks: List<Bookmark>): String
@@ -53,6 +56,7 @@ browser-core :: fun BrowserScript.pressKeyJs(key: String): String
 browser-core :: fun BrowserScript.rectByRefJs(ref: String): String
 browser-core :: fun BrowserScript.scrollByJs(deltaY: Int): String
 browser-core :: fun BrowserScript.scrollIntoViewAndRectJs(ref: String): String
+browser-core :: fun BrowserScript.scrollToBoundaryJs(toBottom: Boolean): String
 browser-core :: fun BrowserScript.scrollToYJs(y: Int): String
 browser-core :: fun BrowserScript.selectJs(ref: String, value: String, byText: Boolean): String
 browser-core :: fun BrowserScript.selectorCountJs(selector: String): String
@@ -87,6 +91,7 @@ browser-core :: fun UrlCleaner.isTrackingParam(name: String): Boolean
 browser-core :: fun UrlCleaner.normalizeKey(url: String): String
 browser-core :: fun UrlCleaner.removedParams(url: String): List<String>
 browser-core :: fun withRetry<T>(policy: RetryPolicy, breaker: CircuitBreaker, block: suspend () -> T,): T
+browser-core :: object BatchActionValidator
 browser-core :: object BookmarkCodec
 browser-core :: object BookmarkFolderNames
 browser-core :: object BrowserScript
@@ -96,6 +101,18 @@ browser-core :: object JsLiteral
 browser-core :: object PageClassifier
 browser-core :: object ReaderParser
 browser-core :: object UrlCleaner
+browser-core :: val BatchAction.append : Boolean
+browser-core :: val BatchAction.byText : Boolean
+browser-core :: val BatchAction.deltaY : Int
+browser-core :: val BatchAction.key : String
+browser-core :: val BatchAction.pressEnter : Boolean
+browser-core :: val BatchAction.ref : String
+browser-core :: val BatchAction.text : String
+browser-core :: val BatchAction.type : Type
+browser-core :: val BatchAction.value : String
+browser-core :: val BatchAction.waitMode : String
+browser-core :: val BatchAction.waitTimeoutMs : Long
+browser-core :: val BatchAction.waitValue : String
 browser-core :: val Bookmark.createdAt : Long
 browser-core :: val Bookmark.folder : String
 browser-core :: val Bookmark.host : String
