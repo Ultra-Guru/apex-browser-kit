@@ -124,7 +124,9 @@ jobs:
           echo "workspace-kit=$WSP" >> "$GITHUB_OUTPUT"
           echo "loom-kit=$LOOM" >> "$GITHUB_OUTPUT"
           echo "courier-kit=$COURIER" >> "$GITHUB_OUTPUT"
-          echo "sibling pins: standard=${STD:0:12} workspace=${WSP:0:12} loom=${LOOM:0:12} courier=${COURIER:0:12}"
+          MEM=$(head -n 1 host-app/gradle/memory-kit.lock 2>/dev/null || echo main)
+          echo "memory-kit=$MEM" >> "$GITHUB_OUTPUT"
+          echo "sibling pins: standard=${STD:0:12} workspace=${WSP:0:12} loom=${LOOM:0:12} courier=${COURIER:0:12} memory=${MEM:0:12}"
 
       - name: Checkout apex-standard-kit (pinned by host lock)
         uses: actions/checkout@v7
@@ -157,6 +159,13 @@ jobs:
           repository: Ultra-Guru/apex-kit-courier
           path: apex-kit-courier
           ref: ${{ steps.host-pins.outputs.courier-kit }}
+      # memory（宿主记忆系统拆库 a58dc7ff 起 settings 条件接线；同款 lock 优先）
+      - name: Checkout apex-kit-memory (pinned by host lock)
+        uses: actions/checkout@v7
+        with:
+          repository: Ultra-Guru/apex-kit-memory
+          path: apex-kit-memory
+          ref: ${{ steps.host-pins.outputs.memory-kit }}
 
       - name: Alias sibling kit dirs (rename transition) + verify wiring
         run: |
@@ -172,14 +181,15 @@ jobs:
                      apex-standard-kit:apex-kit-standard \
                      apex-workspace-kit:apex-kit-workspace\
                      apex-kit-loom:apex-kit-loom\
-                     apex-kit-courier:apex-kit-courier; do
+                     apex-kit-courier:apex-kit-courier \
+                     apex-kit-memory:apex-kit-memory; do
             OLD="${pair%%:*}"; NEW="${pair##*:}"
             if ! grep -qE "$OLD|$NEW" host-app/settings.gradle.kts; then
               echo "::error::宿主 settings.gradle.kts 缺少 $OLD / $NEW 的 includeBuild 接线（composite build 前置条件）"
               exit 1
             fi
           done
-          echo "✅ 宿主已包含五 kit 条件 includeBuild 接线（browser/standard/workspace/loom/courier，新旧名任一形态）"
+          echo "✅ 宿主已包含五 kit 条件 includeBuild 接线（browser/standard/workspace/loom/courier/memory，新旧名任一形态）"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
