@@ -77,6 +77,14 @@ class ApexChromeWiring(
         grantStore = SharedPreferencesGrantStore(appContext),
         scope = scope,
         historySource = { query, limit -> engineHistory(query, limit) },
+        // v1.7.0：会话增强能力束（书签 / 显示设置 / 阅读模式）——全部经
+        // 引擎侧单例工厂取实例，与宿主 DI（BrowserKitModule）共享同一份状态
+        sessionControls = EngineSessionControls(
+            engine = engine,
+            bookmarksStore = com.apex.browser.engine.BookmarkStoreFactory.get(appContext),
+            display = com.apex.browser.engine.EngineDisplayControllerFactory.get(engine),
+            scope = scope,
+        ),
     )
 
     /** chrome 层唯一入口：交给 BrowserChrome(gateway = ...)。 */
@@ -84,9 +92,16 @@ class ApexChromeWiring(
 
     init {
         wiring.onWebViewRebound = { view -> onActiveWebViewChanged?.invoke(view) }
-        // 下载入队回写：Agent 工具 browser_download_list 继续可读
+        // 下载入队回写：Agent 工具 browser_download_list 继续可读；
+        // v1.7.0 同时入账 DownloadCenter（Agent BrowserDownloads 工具的台账源，
+        // 跨重启可查 / pause / resume / retry）
         wiring.downloads.onEnqueued = { fileName, url, dmId ->
             engine.reportDownload(fileName, url, dmId)
+            runCatching {
+                com.apex.browser.engine.DownloadCenterFactory
+                    .get(appContext, engine)
+                    .registerChromeDownload(dmId, fileName, url, null)
+            }
         }
         // Agent 弹窗策略：安全默认 + 审计回写 lastDialog（保持 Agent 上下文注入）
         wiring.agentDecider = AgentDialogPolicy(

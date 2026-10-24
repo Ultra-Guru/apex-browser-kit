@@ -1,19 +1,46 @@
 # Public API surface of :browser-core - COMMITTED BASELINE.
 # Regenerate only with `python scripts/check_api_surface.py --update-baseline` and review the diff.
+browser-core :: class Bookmark(val id: String, val url: String, val title: String, val folder: String =, val createdAt: Long = 0L, val lastVisitedAt: Long = 0L, val host: String =,)
+browser-core :: class BookmarkCore(initial: List<Bookmark> = emptyList())
+browser-core :: class BookmarkCore.AddResult
+browser-core :: class BookmarkFolder(val name: String, val count: Int,)
 browser-core :: class BrowserScript.ExtractMode(val value: String)
 browser-core :: class CircuitBreaker(private val failureThreshold: Int = 5, private val resetTimeoutMs: Long = 30_000,)
 browser-core :: class CircuitBreaker.State
 browser-core :: class CircuitOpenException(message: String) : Exception(message)
 browser-core :: class DomElement(val bid: Int, val ref: String =, val tag: String, val text: String =, val label: String =, val attributes: Map<String, String> = emptyMap(), val rect: Rect = Rect(0, 0, 0, 0), val isVisible: Boolean = true, val isInteractive: Boolean = false, val depth: Int = 0, val childCount: Int = 0,)
 browser-core :: class DomParser.SnapshotStrategy
+browser-core :: class DownloadLedger(initial: List<DownloadLedgerEntry> = emptyList())
+browser-core :: class DownloadLedgerEntry(val dmId: Long, val fileName: String, val url: String, val mimeType: String? = null, val enqueuedAt: Long = 0L,)
 browser-core :: class ElementNotFoundException(message: String) : Exception(message)
 browser-core :: class PageClassifier.PageTypeInfo(val type: String, val hint: String, val signals: Map<String, Int>,)
 browser-core :: class PageSnapshot(val url: String, val title: String, val scrollY: Int, val scrollHeight: Int, val viewportHeight: Int, val interactiveCount: Int, val domSummary: String, val interactiveElements: List<DomElement>, val truncated: Boolean = false, val totalCandidateCount: Int = 0, val timestampMs: Long = 0, val dialogNotice: String? = null,)
 browser-core :: class PermanentActionException(message: String) : Exception(message)
+browser-core :: class ReaderBlock(val kind: ReaderBlockKind, val level: Int = 0, val text: String, val alt: String =, val srcSummary: String =, val index: Int = 0,)
+browser-core :: class ReaderBlockKind(val wire: String)
+browser-core :: class ReaderChapter(val level: Int, val title: String, val blockIndex: Int,)
+browser-core :: class ReaderDocument(val url: String, val title: String, val siteName: String =, val byline: String =, val publishedTime: String =, val blocks: List<ReaderBlock> = emptyList(), val chapters: List<ReaderChapter> = emptyList(), val capturedAtMs: Long = 0L,)
 browser-core :: class Rect(val x: Int, val y: Int, val width: Int, val height: Int)
 browser-core :: class RetryPolicy(val maxRetries: Int = 3, val initialDelayMs: Long = 500, val backoffMultiplier: Double = 2.0, val maxDelayMs: Long = 5000, val retryableExceptions: Set<Class<out Throwable>> = setOf(ElementNotFoundException::class.java, java.util.concurrent.TimeoutException::class.java, WebViewNotRespondingException::class.java,),)
 browser-core :: class WebViewNotRespondingException(message: String) : Exception(message)
+browser-core :: fun Bookmark .fallbackTitle(): String
+browser-core :: fun BookmarkCodec.decode(raw: String?): List<Bookmark>
+browser-core :: fun BookmarkCodec.encode(bookmarks: List<Bookmark>): String
+browser-core :: fun BookmarkCore.add(url: String, title: String, folder: String =): AddResult
+browser-core :: fun BookmarkCore.clearAll(): Int
+browser-core :: fun BookmarkCore.count(): Int
+browser-core :: fun BookmarkCore.find(id: String): Bookmark?
+browser-core :: fun BookmarkCore.folders(): List<BookmarkFolder>
+browser-core :: fun BookmarkCore.isBookmarked(url: String): Boolean
+browser-core :: fun BookmarkCore.list(folder: String? = null): List<Bookmark>
+browser-core :: fun BookmarkCore.moveTo(id: String, folder: String): Boolean
+browser-core :: fun BookmarkCore.recent(limit: Int): List<Bookmark>
+browser-core :: fun BookmarkCore.remove(id: String): Boolean
+browser-core :: fun BookmarkCore.rename(id: String, newTitle: String): Boolean
+browser-core :: fun BookmarkCore.search(query: String, limit: Int = 50): List<Bookmark>
+browser-core :: fun BookmarkCore.touch(id: String): Boolean
 browser-core :: fun BrowserScript.elementAtPointJs(x: Float, y: Float, targetRef: String): String
+browser-core :: fun BrowserScript.elementTextJs(ref: String): String
 browser-core :: fun BrowserScript.extractContentJs(mode: String): String
 browser-core :: fun BrowserScript.highlightJs(ref: String, color: String =): String
 browser-core :: fun BrowserScript.hoverJs(ref: String): String
@@ -26,6 +53,7 @@ browser-core :: fun BrowserScript.pressKeyJs(key: String): String
 browser-core :: fun BrowserScript.rectByRefJs(ref: String): String
 browser-core :: fun BrowserScript.scrollByJs(deltaY: Int): String
 browser-core :: fun BrowserScript.scrollIntoViewAndRectJs(ref: String): String
+browser-core :: fun BrowserScript.scrollToYJs(y: Int): String
 browser-core :: fun BrowserScript.selectJs(ref: String, value: String, byText: Boolean): String
 browser-core :: fun BrowserScript.selectorCountJs(selector: String): String
 browser-core :: fun BrowserScript.selectorPresentJs(selector: String): String
@@ -36,23 +64,62 @@ browser-core :: fun CircuitBreaker.acquire()
 browser-core :: fun CircuitBreaker.onFailure()
 browser-core :: fun CircuitBreaker.onSuccess()
 browser-core :: fun DomParser.parse(rawJson: String, url: String, title: String, scrollY: Int, scrollHeight: Int, viewportHeight: Int, tokenBudget: Int = 1600, strategy: SnapshotStrategy = SnapshotStrategy.INTERACTIVE_ONLY,): PageSnapshot
+browser-core :: fun DownloadLedger.absorbObserved(fileName: String?, url: String?, dmId: Long, mimeType: String? = null): Boolean
+browser-core :: fun DownloadLedger.count(): Int
+browser-core :: fun DownloadLedger.find(dmId: Long): DownloadLedgerEntry?
+browser-core :: fun DownloadLedger.ids(): LongArray
+browser-core :: fun DownloadLedger.list(): List<DownloadLedgerEntry>
+browser-core :: fun DownloadLedger.prune(max: Int = MAX_ENTRIES): List<Long>
+browser-core :: fun DownloadLedger.register(dmId: Long, fileName: String, url: String, mimeType: String?): Boolean
+browser-core :: fun DownloadLedger.remove(dmId: Long): Boolean
+browser-core :: fun DownloadLedgerCodec.decode(raw: String?): List<DownloadLedgerEntry>
+browser-core :: fun DownloadLedgerCodec.encode(entries: List<DownloadLedgerEntry>): String
 browser-core :: fun JsLiteral.string(value: String): String
 browser-core :: fun PageClassifier.classify(signals: Map<String, Int>): PageTypeInfo
 browser-core :: fun PageClassifier.fromJson(rawJson: String): PageTypeInfo
 browser-core :: fun PageClassifier.parseSignals(rawJson: String): Map<String, Int>
+browser-core :: fun ReaderParser.parse(rawJson: String?): ReaderDocument?
+browser-core :: fun ReaderParser.plainText(doc: ReaderDocument, includeOutline: Boolean = true): String
+browser-core :: fun UrlCleaner.clean(url: String): String
+browser-core :: fun UrlCleaner.cleanOrNull(url: String): String?
+browser-core :: fun UrlCleaner.hostOf(url: String): String
+browser-core :: fun UrlCleaner.isTrackingParam(name: String): Boolean
+browser-core :: fun UrlCleaner.normalizeKey(url: String): String
+browser-core :: fun UrlCleaner.removedParams(url: String): List<String>
 browser-core :: fun withRetry<T>(policy: RetryPolicy, breaker: CircuitBreaker, block: suspend () -> T,): T
+browser-core :: object BookmarkCodec
+browser-core :: object BookmarkFolderNames
 browser-core :: object BrowserScript
 browser-core :: object DomParser
+browser-core :: object DownloadLedgerCodec
 browser-core :: object JsLiteral
 browser-core :: object PageClassifier
+browser-core :: object ReaderParser
+browser-core :: object UrlCleaner
+browser-core :: val Bookmark.createdAt : Long
+browser-core :: val Bookmark.folder : String
+browser-core :: val Bookmark.host : String
+browser-core :: val Bookmark.id : String
+browser-core :: val Bookmark.isInRoot : Boolean get()
+browser-core :: val Bookmark.lastVisitedAt : Long
+browser-core :: val Bookmark.title : String
+browser-core :: val Bookmark.url : String
+browser-core :: val BookmarkFolder.count : Int
+browser-core :: val BookmarkFolder.name : String
+browser-core :: val BookmarkFolderNames.ROOT : String
 browser-core :: val BrowserScript.A11Y_FALLBACK_JS : String
 browser-core :: val BrowserScript.CURRENT_URL_JS : String
 browser-core :: val BrowserScript.ExtractMode.value : String
+browser-core :: val BrowserScript.FORCE_DARK_JS : String
+browser-core :: val BrowserScript.FORCE_DARK_OFF_JS : String
 browser-core :: val BrowserScript.MAX_NETWORK_LOG_ENTRIES : Int
 browser-core :: val BrowserScript.MAX_SCROLL_PX : Int
 browser-core :: val BrowserScript.NETWORK_MONITOR_JS : String
+browser-core :: val BrowserScript.PAGE_GEOMETRY_JS : String
 browser-core :: val BrowserScript.PAGE_TYPE_JS : String
 browser-core :: val BrowserScript.POST_ACTION_PROBE_JS : String
+browser-core :: val BrowserScript.READER_DOCUMENT_JS : String
+browser-core :: val BrowserScript.SELECTION_TEXT_JS : String
 browser-core :: val BrowserScript.SNAPSHOT_MAX_ELEMENTS : Int
 browser-core :: val BrowserScript.STEALTH_JS : String
 browser-core :: val CircuitBreaker.currentState : State get()
@@ -67,6 +134,11 @@ browser-core :: val DomElement.rect : Rect
 browser-core :: val DomElement.ref : String
 browser-core :: val DomElement.tag : String
 browser-core :: val DomElement.text : String
+browser-core :: val DownloadLedgerEntry.dmId : Long
+browser-core :: val DownloadLedgerEntry.enqueuedAt : Long
+browser-core :: val DownloadLedgerEntry.fileName : String
+browser-core :: val DownloadLedgerEntry.mimeType : String?
+browser-core :: val DownloadLedgerEntry.url : String
 browser-core :: val PageClassifier.PageTypeInfo.hint : String
 browser-core :: val PageClassifier.PageTypeInfo.signals : Map<String
 browser-core :: val PageClassifier.PageTypeInfo.type : String
@@ -82,6 +154,26 @@ browser-core :: val PageSnapshot.totalCandidateCount : Int
 browser-core :: val PageSnapshot.truncated : Boolean
 browser-core :: val PageSnapshot.url : String
 browser-core :: val PageSnapshot.viewportHeight : Int
+browser-core :: val ReaderBlock.alt : String
+browser-core :: val ReaderBlock.index : Int
+browser-core :: val ReaderBlock.kind : ReaderBlockKind
+browser-core :: val ReaderBlock.level : Int
+browser-core :: val ReaderBlock.srcSummary : String
+browser-core :: val ReaderBlock.text : String
+browser-core :: val ReaderBlockKind.wire : String
+browser-core :: val ReaderChapter.blockIndex : Int
+browser-core :: val ReaderChapter.level : Int
+browser-core :: val ReaderChapter.title : String
+browser-core :: val ReaderDocument.blocks : List<ReaderBlock>
+browser-core :: val ReaderDocument.byline : String
+browser-core :: val ReaderDocument.capturedAtMs : Long
+browser-core :: val ReaderDocument.chapters : List<ReaderChapter>
+browser-core :: val ReaderDocument.isMeaningful : Boolean
+browser-core :: val ReaderDocument.publishedTime : String
+browser-core :: val ReaderDocument.readingMinutes : Int
+browser-core :: val ReaderDocument.siteName : String
+browser-core :: val ReaderDocument.title : String
+browser-core :: val ReaderDocument.url : String
 browser-core :: val Rect.height : Int
 browser-core :: val Rect.width : Int
 browser-core :: val Rect.x : Int

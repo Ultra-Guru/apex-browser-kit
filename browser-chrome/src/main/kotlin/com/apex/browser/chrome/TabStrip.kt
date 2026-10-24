@@ -191,21 +191,11 @@ private fun NewTabChip(onClick: () -> Unit) {
     }
 }
 
-/** 站点首字母徽标（引擎将来可替换为真实 favicon 的占位实现）。 */
+/**
+ * 站点徽标：v1.7.0 起经 [FaviconImage] 加载真实 favicon（DuckDuckGo Icons，
+ * 进程内 LRU），未命中/失败回退首字母徽标——视觉规格与占位实现完全一致。
+ */
 @Composable
 internal fun FaviconBadge(host: String, size: Int = 22) {
-    val p = chromePalette()
-    Box(
-        modifier = Modifier
-            .size(size.dp)
-            .background(p.accent.copy(alpha = 0.14f), CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = host.firstOrNull()?.uppercase() ?: "?",
-            fontSize = 11.sp,
-            color = p.accent,
-            fontWeight = FontWeight.Bold,
-        )
-    }
+    FaviconImage(host = host, size = size)
 }

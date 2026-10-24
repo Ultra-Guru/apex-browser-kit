@@ -118,9 +118,13 @@ jobs:
           set -euo pipefail
           STD=$(head -n 1 host-app/gradle/standard-kit.lock 2>/dev/null || echo main)
           WSP=$(head -n 1 host-app/gradle/workspace-kit.lock 2>/dev/null || echo main)
+          LOOM=$(head -n 1 host-app/gradle/loom-kit.lock 2>/dev/null || echo main)
+          COURIER=$(head -n 1 host-app/gradle/courier-kit.lock 2>/dev/null || echo main)
           echo "standard-kit=$STD" >> "$GITHUB_OUTPUT"
           echo "workspace-kit=$WSP" >> "$GITHUB_OUTPUT"
-          echo "sibling pins: standard-kit=${STD:0:12} workspace-kit=${WSP:0:12}"
+          echo "loom-kit=$LOOM" >> "$GITHUB_OUTPUT"
+          echo "courier-kit=$COURIER" >> "$GITHUB_OUTPUT"
+          echo "sibling pins: standard=${STD:0:12} workspace=${WSP:0:12} loom=${LOOM:0:12} courier=${COURIER:0:12}"
 
       - name: Checkout apex-standard-kit (pinned by host lock)
         uses: actions/checkout@v7
@@ -136,6 +140,24 @@ jobs:
           path: apex-workspace-kit
           ref: ${{ steps.host-pins.outputs.workspace-kit }}
 
+      # 宿主 fusion v3（PR #411）起 code-engine 还接线 loom/courier 两库
+      # （com.apex.loomkit:loom-weave / com.apex.courierkit:courier-dispatch，
+      # 均无远端 Maven 可解析）—— 缺兄弟目录则宿主依赖解析直接失败。
+      # 同款「宿主 lock 优先、缺锁回退 main」钉版本。
+      - name: Checkout apex-kit-loom (pinned by host lock)
+        uses: actions/checkout@v7
+        with:
+          repository: Ultra-Guru/apex-kit-loom
+          path: apex-kit-loom
+          ref: ${{ steps.host-pins.outputs.loom-kit }}
+
+      - name: Checkout apex-kit-courier (pinned by host lock)
+        uses: actions/checkout@v7
+        with:
+          repository: Ultra-Guru/apex-kit-courier
+          path: apex-kit-courier
+          ref: ${{ steps.host-pins.outputs.courier-kit }}
+
       - name: Alias sibling kit dirs (rename transition) + verify wiring
         run: |
           # 符号链接 target 按链接所在目录（workspace 根）解析 —— 裸名，勿加前缀
@@ -148,14 +170,16 @@ jobs:
           # 接线校验：新旧任一形态在即算接通
           for pair in apex-browser-kit:apex-kit-browser \
                      apex-standard-kit:apex-kit-standard \
-                     apex-workspace-kit:apex-kit-workspace; do
+                     apex-workspace-kit:apex-kit-workspace\
+                     apex-kit-loom:apex-kit-loom\
+                     apex-kit-courier:apex-kit-courier; do
             OLD="${pair%%:*}"; NEW="${pair##*:}"
             if ! grep -qE "$OLD|$NEW" host-app/settings.gradle.kts; then
               echo "::error::宿主 settings.gradle.kts 缺少 $OLD / $NEW 的 includeBuild 接线（composite build 前置条件）"
               exit 1
             fi
           done
-          echo "✅ 宿主已包含三 kit 条件 includeBuild 接线（browser/standard/workspace，新旧名任一形态）"
+          echo "✅ 宿主已包含五 kit 条件 includeBuild 接线（browser/standard/workspace/loom/courier，新旧名任一形态）"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6

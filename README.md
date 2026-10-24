@@ -69,7 +69,7 @@ Embedded WebView automation engine with Compose chrome UI — 从
 | Gradle | 8.14 |
 | Compose BOM | 2025.11.01 |
 | Kotlin Coroutines | 1.10.2 |
-| kotlinx.serialization | 1.9.0 |
+| kotlinx.serialization | 1.11.0 |
 | compileSdk / minSdk | 35 / 26 |
 
 > Requires **Kotlin 2.2.21 + Compose compiler plugin of the same version**（composite build 侧 AGP 必须同为 8.13.2）。
@@ -91,9 +91,9 @@ if (file("../apex-kit-browser").isDirectory) {
 
 ```kotlin
 dependencies {
-    implementation("com.apex.browser:browser-core:1.5.0")
-    implementation("com.apex.browser:browser-engine:1.5.0")
-    implementation("com.apex.browser:browser-chrome:1.5.0")
+    implementation("com.apex.browser:browser-core:1.7.0")
+    implementation("com.apex.browser:browser-engine:1.7.0")
+    implementation("com.apex.browser:browser-chrome:1.7.0")
 }
 ```
 
@@ -311,6 +311,99 @@ Compose UI 层文案继续走 `res/values` + `values-en`（`browser_` 前缀强�
 版本：三模块 1.1.0 → **1.2.0**（additive API，全部为带默认值参数的尾参扩展，
 宿主源码兼容）。
 
+## v1.7.0 变更（细节功能与用户体验补全：书签 / 阅读模式 / 下载中心 / 显示控制 / 全页截图 / 干净链接）
+
+### 书签体系（chrome + engine，新增）
+
+- **`BookmarkStore`**（`:browser-engine`，SharedPreferences 持久化）+
+  **`BookmarkCore`/`BookmarkCodec`**（`:browser-core` 纯 JVM 规则/编解码，
+  MRU 排序 / 文件夹 / 搜索 / 500 条配额淘汰，全部可单测）；
+- **去重键走 `UrlCleaner.normalizeKey`**：同一文章的「分享链接（带 utm）」
+  与原始链接归一书签——移动端分享场景不再把书签栏刷成同一页面的三四种
+  参数形态；重复收藏 = 更新（不报错）；
+- **`BookmarksSheet`**（chrome）：搜索框（本地过滤，标题/站点/网址）+
+  文件夹片 + 行内删除 + 「收藏当前页」；favicon 经 `FaviconImage` 渲染；
+- 接线：`ChromeSessionControls` 能力束（`ApexChromeWiring` 构造时注入
+  `NeonChromeWiring` → adapter → `BrowserEngineGateway` additive 成员，
+  未接线自动隐藏，`FakeEngineGateway` 零改动）。
+
+### 下载中心（`DownloadCenter`，`:browser-engine` 新增）
+
+- **台账持久化**（`DownloadLedger` + JSON codec，SharedPreferences）：
+  系统 DownloadManager 的 ID 跨进程重启可续查——「重启后下载列表为空」
+  这一移动端普遍缺口被补上；
+- **双下载源吸收**：chrome 人用下载（`onEnqueued` 回报入账）+ Agent 驾驶期
+  引擎下载（`lastDownload` 轮询吸收孤儿）；
+- **生命周期控制**：pause / resume（API 24+）/ cancel / retry（原 URL 重入队，
+  转发会话 Cookie）/ forget / 打开系统下载 UI；
+- 活动下载 500ms 轮询、终态即停（省电）；状态语义翻译
+  （QUEUED/RUNNING/PAUSED/COMPLETED/FAILED）。
+
+### 阅读模式（chrome + core，新增）
+
+- **`READER_DOCUMENT_JS`**（`:browser-core`）：按文档顺序采集结构块
+  （heading 带层级 / paragraph / quote / code 保留换行 / image 带 alt /
+  list_item）+ 排版元数据（og:site_name / author / published_time）；
+- **`ReaderParser`/`ReaderDocument`**（纯 JVM）：防御性解析 + 目录聚合 +
+  `plainText` 结构化拍平（Agent 消费镜像）；
+- **`ReaderSheet`**（chrome）：全屏沉浸层——字号 ±（0.8..1.6 线性）、
+  目录片点按跳块（LazyColumn 锚点滚动）、阅读时长估算、三态
+  （Loading/Ready/Unavailable——工具页属正常降级不是错误）。
+
+### 显示控制（`EngineDisplayController`，`:browser-engine` 新增）
+
+- **文字缩放**（WebSettings.textZoom，50..200）：跨标签保持
+  （`ActiveTabListener` 重放）、跨导航幂等；
+- **夜间模式**（算法反色 JS 注入，零 androidx.webkit 依赖）：
+  `onPageFinished` 重注（chrome wiring 钩子）保持跨页生效；
+- **清除浏览数据**（Cookie 全局 / 缓存 / WebView 原生历史）+
+  `DisplaySettingsSheet`（chrome）：缩放滑步 + 快速档位 + 双开关 +
+  不可逆确认对话框（ChromeScrimDialog 仪式感）。
+
+### 全页截图（`fullPageScreenshot` 扩展，`:browser-engine` 新增）
+
+- 滚动分段 + Canvas 拼接实现 Playwright `fullPage: true` 同语义；
+- 分段上限 5（ARGB_8888 位图 OOM 防线：`runCatching` 返回 null 而非崩溃）；
+  截后恢复原滚动位置（零副作用退出）。
+
+### URL 卫生（`UrlCleaner`，`:browser-core` 新增）
+
+- 跟踪参数剥离（utm_*/gclid/fbclid/msclkid 等 40+ 精确项 + 16 前缀族；
+  **语义两可参数 ref/source/id 不删**——误删即断链）；
+- 「复制干净链接」菜单项：剔除数实时入轻提示，无可剔除时回退普通文案
+  （不制造虚假的隐私获得感）；
+- 手工解析零失败面（`java.net.URI` 对未转义中文/空格抛错——真实分享链接
+  的常态）；幂等（书签去重依赖）。
+
+### 真实 favicon（`FaviconLoader`，chrome 新增）
+
+- DuckDuckGo Icons（`icons.duckduckgo.com`，按 host 取图不携路径——把
+  「用户在看哪个页面」泄露给图标服务的面积最小化）+ 进程内 LruCache(32)
+  + 在途去重 + 失败回退首字母徽标（视觉规格与占位实现一致，调用点零迁移）。
+
+### 脚本面扩展（`BrowserScript`，v1.7.0 段）
+
+- `PAGE_GEOMETRY_JS` / `scrollToYJs`（全页截图几何与可复现分段）；
+- `READER_DOCUMENT_JS` / `SELECTION_TEXT_JS` / `elementTextJs(ref)`
+  （阅读采集 / 选区文本 / 元素文本读取）；
+- `FORCE_DARK_JS` / `FORCE_DARK_OFF_JS`（幂等夜间模式注入与撤除）。
+
+版本：三模块 1.5.0 → **1.7.0**（纯 additive API；连同已合并未发版的
+v1.6.0 实时悬浮窗尺寸调整一并过发版列车）。门禁全绿：core 纯度 /
+JS 注入边界 / WebView 加固 / 资源中英镜像（84 → 118 键）/ 文件预算
+（`BrowserEngine.kt` 保持 1199/1200 非注释行——全部增强走新文件）/
+版本单一列车 / API 基线零删改。
+
+## v1.6.0 变更（实时页面悬浮窗尺寸调整，补记发版）
+
+### `LiveViewOverlay` 缩放把手（v1.6.0 已合并、随 1.7.0 列车发版）
+
+- 右下角缩放把手（◢）拖拽调整实时页面悬浮窗尺寸；比例钳制
+  （0.35–0.95 宽 / 0.25–0.85 高）+ SharedPreferences 持久化 +
+  帧对齐 16ms `updateViewLayout` 节流；
+- 自适应轮询节流（加载中 500ms / 空闲 2000ms，`pollIntervalFor` 纯函数）；
+  纯函数与钳制由 `LiveViewSizeTest` 锁定。
+
 ## v1.5.0 变更（App 内嵌浏览器宿主 / 三承载面互斥仲裁）
 
 ### App 内嵌浏览器宿主（`InAppChromeHost`，新增）
@@ -478,6 +571,16 @@ Compose UI 层文案继续走 `res/values` + `values-en`（`browser_` 前缀强�
 - **v1.3.0**：`locateElements` 迁移到 `BrowserScript.locateJs` 后，
   `check_js_injection.py` GATE 1 的扫描范围仍为 `BrowserScript.kt`（引擎侧注入
   JS 已全部收敛到该文件，规则本身无需扩面）。
+- **v1.7.0**：全页截图的 sticky/fixed 元素会在每个分段重复（顶栏在拼接图
+  出现 N 次）——Canvas 快照式全页截图的固有形态（Playwright 走 CDP 越过
+  渲染层，WebView 无此通道）；分段上限 5 是 OOM 防线不是能力上限。
+- **v1.7.0**：夜间模式为算法反色——iframe 内文档与个别 fixed 层可能出现
+  「半亮半暗」；追求完美需 androidx.webkit 的 algorithmic darkening（引依赖，
+  不做）。清除浏览数据不含地址栏联想历史（引擎 recentHistory 的内存
+  ArrayDeque 无清空 API——后续版本补）。
+- **v1.7.0**：favicon 经 DuckDuckGo Icons 按宿主名取图（无 host 网络时静默
+  回退首字母徽标）；`DownloadCenter` 的台账只记本库发起的下载，不吞并
+  整个系统下载列表（职责边界）。
 
 ## 来源追溯
 

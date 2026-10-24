@@ -109,4 +109,40 @@
     <string name="browser_live_close_cd">收起实时页面悬浮窗</string>
     <string name="browser_live_url_empty">实时页面 · 等待 Agent 开始浏览</string>
     <string name="browser_live_resize_cd">拖拽调整悬浮窗大小</string>
+    <!-- v1.7.0 会话增强（书签 / 阅读模式 / 显示设置 / 干净链接） -->
+    <string name="browser_menu_bookmarks">书签</string>
+    <string name="browser_menu_reader_mode">阅读模式</string>
+    <string name="browser_menu_display_settings">显示设置</string>
+    <string name="browser_menu_copy_clean_link">复制干净链接</string>
+    <string name="browser_bookmarks_title">书签</string>
+    <string name="browser_bookmarks_empty">还没有书签。点右上角「收藏当前页」，或让 Agent 用 BrowserBookmarks 工具添加。</string>
+    <string name="browser_bookmarks_no_match">没有匹配的书签。</string>
+    <string name="browser_bookmarks_add_current">收藏当前页</string>
+    <string name="browser_bookmarks_search_hint">搜索书签（标题 / 站点 / 网址）</string>
+    <string name="browser_bookmarks_folder_root">根目录</string>
+    <string name="browser_bookmark_delete">删除书签</string>
+    <string name="browser_reader_title">阅读模式</string>
+    <string name="browser_reader_empty">当前页面没有结构化正文（可能是工具页 / 登录页 / 空页），不适合阅读模式。</string>
+    <string name="browser_reader_close">退出阅读模式</string>
+    <string name="browser_reader_font_larger">增大字号</string>
+    <string name="browser_reader_font_smaller">减小字号</string>
+    <string name="browser_reader_minutes">约 %1$d 分钟</string>
+    <string name="browser_reader_image">图片：%1$s</string>
+    <string name="browser_display_title">显示设置</string>
+    <string name="browser_display_text_zoom">文字缩放</string>
+    <string name="browser_display_text_zoom_value">%1$d%%</string>
+    <string name="browser_display_force_dark">夜间模式</string>
+    <string name="browser_display_force_dark_desc">算法反色渲染页面（图片保持原色）</string>
+    <string name="browser_display_clear_data">清除浏览数据</string>
+    <string name="browser_clear_cookies">Cookie（全部站点）</string>
+    <string name="browser_clear_cookies_desc">退出所有网站的登录态</string>
+    <string name="browser_clear_caches">缓存</string>
+    <string name="browser_clear_caches_desc">释放存储空间，下次访问重新下载</string>
+    <string name="browser_clear_histories">历史</string>
+    <string name="browser_clear_histories_desc">清除页面导航历史（不含地址栏联想）</string>
+    <string name="browser_clear_confirm">清除</string>
+    <string name="browser_clear_confirm_title">清除浏览数据？</string>
+    <string name="browser_clear_confirm_desc">该操作不可撤销。Cookie 清除后所有站点需要重新登录。</string>
+    <string name="browser_snack_clean_link_copied">已复制干净链接（剔除 %1$d 个跟踪参数）</string>
+
 </resources>

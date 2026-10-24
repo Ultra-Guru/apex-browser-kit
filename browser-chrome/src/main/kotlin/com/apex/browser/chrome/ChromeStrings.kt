@@ -25,7 +25,7 @@ package com.apex.browser.chrome
  *   - Compose UI 层文案继续走 res/values + values-en（`browser_` 前缀强制），
  *     两套机制各管一层：UI 层跟系统语言，逻辑层跟注入实现。
  *
- * 13 条成员的契约由 ChromeStringsTest 锁定（中文逐字一致 / 英文非空 /
+ * 18 条成员的契约由 ChromeStringsTest 锁定（中文逐字一致 / 英文非空 /
  * 成员计数防漂移）。
  */
 interface ChromeStrings {
@@ -75,6 +75,23 @@ interface ChromeStrings {
     /** JS 弹窗走「关闭」分支时的审计标签。 */
     val jsDialogDismissLabel: String
 
+    /* ---------------- v1.7.0 会话增强（书签 / 阅读模式 / 显示设置） ---------------- */
+
+    /** 收藏当前页后的轻提示（含「重复即更新」语义）。 */
+    val snackBookmarkAdded: String
+
+    /** 删除书签后的轻提示。 */
+    val snackBookmarkRemoved: String
+
+    /** 当前页不适合阅读模式时的轻提示。 */
+    val snackReaderUnavailable: String
+
+    /** 清除浏览数据完成后的轻提示。 */
+    val snackClearedData: String
+
+    /** 文字缩放生效后的轻提示，须含 [percent] 数值。 */
+    fun textZoomHint(percent: Int): String
+
     companion object {
         /**
          * 默认实现：中文（[ZhChromeStrings]，与 v1.1.0 硬编码逐字一致）。
@@ -100,6 +117,11 @@ object ZhChromeStrings : ChromeStrings {
     override val jsDialogConfirmLabel: String = "确认"
     override val jsDialogDenyLabel: String = "拒绝"
     override val jsDialogDismissLabel: String = "关闭"
+    override val snackBookmarkAdded: String = "已加入书签（重复页面自动更新）"
+    override val snackBookmarkRemoved: String = "已移除书签"
+    override val snackReaderUnavailable: String = "当前页面不适合阅读模式"
+    override val snackClearedData: String = "已清除浏览数据"
+    override fun textZoomHint(percent: Int): String = "文字缩放已设为 $percent%"
 }
 
 /**
@@ -120,4 +142,9 @@ object EnglishChromeStrings : ChromeStrings {
     override val jsDialogConfirmLabel: String = "Confirm"
     override val jsDialogDenyLabel: String = "Deny"
     override val jsDialogDismissLabel: String = "Close"
+    override val snackBookmarkAdded: String = "Bookmarked (re-add updates it)"
+    override val snackBookmarkRemoved: String = "Bookmark removed"
+    override val snackReaderUnavailable: String = "This page is not suitable for Reader Mode"
+    override val snackClearedData: String = "Browsing data cleared"
+    override fun textZoomHint(percent: Int): String = "Text zoom set to $percent%"
 }

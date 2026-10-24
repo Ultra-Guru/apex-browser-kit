@@ -746,6 +746,206 @@ object BrowserScript {
     fun networkIdleJs(): String =
         "(function(){ return window.__apexNetPending || 0; })();"
 
+    // ═══════════════════════════════════════════════════════════════════
+    //  v1.7.0 细节功能脚本（全页截图几何 / 阅读模式采集 / 选择文本 / 夜间模式）
+    //  注入口径不变：外部字符串一律 [JsLiteral.string]，无 Promise（等待归 Kotlin 侧）。
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * 页面几何采集（v1.7.0 全页截图的分段依据）。
+     *
+     * 返回 scrollY / scrollHeight / scrollWidth / viewportH / viewportW 的
+     * 同步 JSON。scrollHeight 取 documentElement 与 body 的较大值——部分
+     * 站点（典型：旧式框架页 + body 高度撑开）二者差异巨大，取小值会把
+     * 全页截图截短。无 Promise（等待归 Kotlin 侧轮询/延时）。
+     */
+    val PAGE_GEOMETRY_JS: String
+        get() = """
+        (function(){
+          var de = document.documentElement, b = document.body;
+          return JSON.stringify({
+            scrollY: window.scrollY || 0,
+            scrollHeight: Math.max(de ? de.scrollHeight : 0, b ? b.scrollHeight : 0),
+            scrollWidth: Math.max(de ? de.scrollWidth : 0, b ? b.scrollWidth : 0),
+            viewportH: window.innerHeight || 0,
+            viewportW: window.innerWidth || 0
+          });
+        })();
+        """.trimIndent()
+
+    /**
+     * 绝对滚动到文档 Y 坐标（v1.7.0 全页截图的分段滚动）。
+     *
+     * 与 [scrollByJs]（相对滚动）互补：截图拼接需要**可复现**的段起点，
+     * 相对滚动在 sticky/fixed 元素干扰下会漂移。y 经 Kotlin 侧
+     * `coerceIn(0, MAX_SCROLL_PX)` 钳制后注入（数值字面量，非外部字符串）。
+     */
+    fun scrollToYJs(y: Int): String {
+        val clamped = y.coerceIn(0, MAX_SCROLL_PX)
+        return """
+        (function(){
+          try { window.scrollTo(0, $clamped); return true; } catch(e){ return false; }
+        })();
+        """.trimIndent()
+    }
+
+    /**
+     * 阅读模式结构化采集（v1.7.0，[com.apex.browser.core.ReaderParser] 的数据源）。
+     *
+     * 与 [extractContentJs] 的 article 模式（拍平纯文本）不同：本脚本按
+     * **文档顺序**输出结构块（heading 带 level / paragraph / quote / code /
+     * image 带 alt / list_item），并采集排版元数据（og:site_name / author /
+     * article:published_time）。正文根的选取与 article 模式同源
+     *（article → main → [role=main] → 最长 div/section）。
+     *
+     * 防御性要点（老内核兼容）：
+     * - `el.closest()` 逐块兜底 try/catch（Chromium 41+ 才有；再老的选择器
+     *   引擎上querySelectorAll 抛错时整体返回 null，调用方降级 article 文本）；
+     * - `p` 在 `li` / `blockquote` 内时跳过（由外层块统一取文本，避免同段
+     *   文本双记）；
+     * - `pre` 保留原始换行（不做 `\s+` 折叠——代码块的格式即内容）；
+     * - data: 内联图（站点图标/雪花像素）跳过。
+     * 块数硬上限 400、单块文本 4000 字符（与 [ReaderParser] 双侧一致的口径）。
+     */
+    val READER_DOCUMENT_JS: String
+        get() = """
+        (function(){
+          try {
+            function txt(el, cap, keepBreaks){
+              if (!el) return '';
+              var s = el.innerText || el.textContent || '';
+              if (!keepBreaks) s = s.replace(/\s+/g, ' ');
+              return s.trim().slice(0, cap || 4000);
+            }
+            var root = document.querySelector('article') || document.querySelector('main') || document.querySelector('[role=main]');
+            if (!root) {
+              var best = null, bestLen = 0, divs = document.querySelectorAll('div,section');
+              for (var i=0;i<divs.length;i++){ var d = divs[i], l = (d.innerText||'').length; if (l > bestLen) { best = d; bestLen = l; } }
+              root = best || document.body;
+            }
+            if (!root) return JSON.stringify(null);
+            var clone = root.cloneNode(true);
+            var junk = clone.querySelectorAll('script,style,nav,footer,aside,header,noscript,iframe,form,[aria-hidden=true],[role=navigation]');
+            for (var i=0;i<junk.length;i++) junk[i].remove();
+            function meta(n){
+              var el = document.querySelector('meta[property="'+n+'"], meta[name="'+n+'"]');
+              return el ? (el.getAttribute('content')||'') : '';
+            }
+            var blocks = [];
+            var nodes = clone.querySelectorAll('h1,h2,h3,h4,h5,h6,p,blockquote,pre,img,li');
+            for (var j=0;j<nodes.length && blocks.length<400;j++){
+              var el = nodes[j], tag = el.tagName;
+              if (tag === 'IMG') {
+                var src = el.getAttribute('src') || '';
+                if (!src || src.indexOf('data:') === 0) continue;
+                blocks.push({ kind:'image', text:'', alt:(el.getAttribute('alt')||'').trim().slice(0,300), src:src.slice(0,300) });
+                continue;
+              }
+              if (tag === 'P') {
+                var owner = null;
+                try { owner = el.closest('li,blockquote'); } catch(e) { owner = null; }
+                if (owner) continue;
+                var ptext = txt(el, 4000);
+                if (ptext) blocks.push({ kind:'paragraph', text:ptext, level:0 });
+                continue;
+              }
+              if (tag === 'BLOCKQUOTE') {
+                var qtext = txt(el, 4000);
+                if (qtext) blocks.push({ kind:'quote', text:qtext, level:0 });
+                continue;
+              }
+              if (tag === 'PRE') {
+                var ctext = txt(el, 4000, true);
+                if (ctext) blocks.push({ kind:'code', text:ctext, level:0 });
+                continue;
+              }
+              if (tag === 'LI') {
+                var ltext = txt(el, 2000);
+                if (ltext) blocks.push({ kind:'list_item', text:ltext, level:0 });
+                continue;
+              }
+              var lvl = parseInt(tag.charAt(1), 10) || 1;
+              var htext = txt(el, 300);
+              if (htext) blocks.push({ kind:'heading', text:htext, level:lvl });
+            }
+            if (!blocks.length) return JSON.stringify(null);
+            return JSON.stringify({
+              url: location.href, title: document.title,
+              siteName: meta('og:site_name'),
+              byline: meta('author') || meta('article:author'),
+              publishedTime: meta('article:published_time') || meta('date'),
+              blocks: blocks
+            });
+          } catch(e) { return JSON.stringify(null); }
+        })();
+        """.trimIndent()
+
+    /**
+     * 当前选区文本（v1.7.0「复制选择文本」）：`window.getSelection()` 的
+     * 字符串化；无选区返回空串。同步、无 Promise。
+     */
+    val SELECTION_TEXT_JS: String
+        get() = """
+        (function(){
+          try {
+            if (!window.getSelection) return '';
+            return String(window.getSelection());
+          } catch(e) { return ''; }
+        })();
+        """.trimIndent()
+
+    /**
+     * 按 ref 读取元素可见文本（v1.7.0「复制元素文本」：Agent 指定某卡片/
+     * 段落把文字取回）。[ref] 经 [JsLiteral.string] 编码，定位与
+     * [rectByRefJs] 同源（[refLookupJs] 的 `===` 严格比较，不进 CSS 解析）。
+     */
+    fun elementTextJs(ref: String): String =
+        """
+        (function(){
+          ${refLookupJs(ref)}
+          if (!el) return JSON.stringify(null);
+          var t = (el.innerText || el.textContent || '').trim();
+          return JSON.stringify({ text: t.slice(0, 20000), length: t.length });
+        })();
+        """.trimIndent()
+
+    /**
+     * 夜间模式注入（v1.7.0 显示控制）：算法反色滤镜。
+     *
+     * `html` 整树 `invert(1) hue-rotate(180deg)`，媒体元素再反转一次还原
+     *（图片/视频不该变「负片」）；内联 background-image 由属性选择器匹配
+     * 同样二次反转。幂等守卫 `window.__apexForceDark`——重复注入零效果，
+     * 导航后 JS 上下文重置由引擎侧监听重注（与 STEALTH_JS 同款接线哲学）。
+     *
+     * 已知取舍（文档而非隐瞒）：fixed/sticky 元素与 iframe 内文档不参与
+     * html 级滤镜的部分场景会出现「半亮半暗」；这是算法反色的固有形态，
+     * 追求完美需 androidx.webkit 的 algorithmic darkening（引依赖，不做）。
+     */
+    val FORCE_DARK_JS: String
+        get() = """
+        (function(){
+          if (window.__apexForceDark) return true;
+          window.__apexForceDark = true;
+          var s = document.createElement('style');
+          s.id = '__apex-force-dark-style';
+          s.textContent = 'html{filter:invert(1) hue-rotate(180deg);background:#0b0e14 !important;}' +
+            'img,video,picture,canvas,svg,iframe,[style*="background-image"]{filter:invert(1) hue-rotate(180deg);}';
+          document.documentElement.appendChild(s);
+          return true;
+        })();
+        """.trimIndent()
+
+    /** 夜间模式撤除（v1.7.0）：摘掉注入的 style 节点并复位幂等标记。 */
+    val FORCE_DARK_OFF_JS: String
+        get() = """
+        (function(){
+          window.__apexForceDark = false;
+          var s = document.getElementById('__apex-force-dark-style');
+          if (s && s.parentNode) s.parentNode.removeChild(s);
+          return true;
+        })();
+        """.trimIndent()
+
     /** 内容抽取模式。 */
     enum class ExtractMode(val value: String) {
         ARTICLE("article"), TABLES("tables"), LINKS("links"), META("meta")

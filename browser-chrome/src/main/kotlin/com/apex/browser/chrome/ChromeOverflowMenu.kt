@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
@@ -21,6 +22,9 @@ import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.ViewModule
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -80,6 +84,7 @@ internal fun ChromeOverflowMenu(
     ui: ChromeUiState,
     controller: BrowserChromeController,
     onCopyLink: () -> Unit,
+    onCopyCleanLink: () -> Unit,
 ) {
     DropdownMenu(
         expanded = expanded,
@@ -98,7 +103,16 @@ internal fun ChromeOverflowMenu(
             checked = ui.desktopMode,
         ) { controller.toggleDesktopMode() }
         MenuRow(stringResource(R.string.browser_menu_copy_link), Icons.Filled.ContentCopy) { onCopyLink() }
+        MenuRow(stringResource(R.string.browser_menu_copy_clean_link), Icons.Filled.LinkOff) { onCopyCleanLink() }
         HorizontalDivider(color = chromePalette().stroke)
+        // v1.7.0：可选能力面——未接线时菜单项不渲染（与 Userscripts 的可选纪律一致）
+        if (ui.bookmarksAvailable) {
+            MenuRow(stringResource(R.string.browser_menu_bookmarks), Icons.Filled.Bookmarks) { controller.onMenuAction(ChromeMenuAction.Bookmarks) }
+        }
+        MenuRow(stringResource(R.string.browser_menu_reader_mode), Icons.AutoMirrored.Filled.MenuBook) { controller.onMenuAction(ChromeMenuAction.ReaderMode) }
+        if (ui.displaySettingsAvailable) {
+            MenuRow(stringResource(R.string.browser_menu_display_settings), Icons.Filled.Tune) { controller.onMenuAction(ChromeMenuAction.DisplaySettings) }
+        }
         MenuRow(stringResource(R.string.browser_menu_downloads), Icons.Filled.Download) { controller.onMenuAction(ChromeMenuAction.Downloads) }
         MenuRow(stringResource(R.string.browser_menu_userscripts), Icons.Filled.Code) { controller.onMenuAction(ChromeMenuAction.Userscripts) }
         MenuRow(stringResource(R.string.browser_menu_open_external), Icons.AutoMirrored.Filled.OpenInNew) { controller.onMenuAction(ChromeMenuAction.OpenExternal) }
