@@ -39,7 +39,7 @@ permissions:
 jobs:
   scan-pr:
     name: Scan (new vulnerabilities only)
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36"
 
   scan-scheduled:
     name: Scan (full, weekly)
